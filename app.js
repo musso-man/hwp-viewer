@@ -363,6 +363,38 @@ function parseSvgNaturalSize(svgString) {
   return { baseWidth: BASE_A4_WIDTH_PX, baseHeight: Math.round(BASE_A4_WIDTH_PX * DEFAULT_PAGE_RATIO), ratio: DEFAULT_PAGE_RATIO };
 }
 
+let svgScopeSeq = 0;
+
+/**
+ * 여러 페이지·썸네일 SVG를 동일 DOM에 인라인 삽입할 때
+ * clipPath(cell-clip-*, body-clip-*)·gradient(grad*) 등의 id 충돌로
+ * 다른 페이지의 표 셀 내용이 잘리거나 비어 보이는 문제를 방지한다.
+ */
+function scopeSvgIds(svgString) {
+  if (!svgString || typeof svgString !== 'string') return svgString;
+
+  const definedIds = new Set();
+  const idDefRe = /\bid=(["'])([^"']+)\1/g;
+  let m;
+  while ((m = idDefRe.exec(svgString)) !== null) {
+    definedIds.add(m[2]);
+  }
+  if (definedIds.size === 0) return svgString;
+
+  const prefix = `rhwp-${++svgScopeSeq}-`;
+
+  return svgString
+    .replace(/\bid=(["'])([^"']+)\1/g, (full, q, id) =>
+      definedIds.has(id) ? `id=${q}${prefix}${id}${q}` : full
+    )
+    .replace(/url\(\s*(["']?)#([^)"'\s]+)\1\s*\)/g, (full, q, id) =>
+      definedIds.has(id) ? `url(${q}#${prefix}${id}${q})` : full
+    )
+    .replace(/\b((?:xlink:)?href)=(["'])#([^"']+)\2/g, (full, attr, q, id) =>
+      definedIds.has(id) ? `${attr}=${q}#${prefix}${id}${q}` : full
+    );
+}
+
 function extractCleanPageText(doc, pageIdx) {
   try {
     const raw = doc.getPageText(pageIdx);
@@ -831,7 +863,7 @@ function renderSinglePage(tab, pageIdx, card) {
   if (getActiveTab()?.id !== tab.id) return;
 
   try {
-    const svg = tab.doc.renderPageSvg(pageIdx);
+    const svg = scopeSvgIds(tab.doc.renderPageSvg(pageIdx));
     const nat = parseSvgNaturalSize(svg);
     tab.pageDims.set(pageIdx, nat);
 
@@ -864,7 +896,7 @@ function renderSingleThumb(tab, pageIdx, previewEl) {
   if (getActiveTab()?.id !== tab.id) return;
 
   try {
-    const svg = tab.doc.renderPageSvg(pageIdx);
+    const svg = scopeSvgIds(tab.doc.renderPageSvg(pageIdx));
     previewEl.innerHTML = svg;
     const svgEl = previewEl.querySelector('svg');
     if (svgEl) {
