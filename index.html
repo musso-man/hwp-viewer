@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>한글 뷰어 — HWPX · HWP 브라우저 문서 뷰어</title>
+  <meta name="description" content="GitHub Pages와 브라우저에서 .hwpx, .hwp, .hml 한글 문서를 붙여넣기(Ctrl+V), 드래그 앤 드롭, URL 링크로 바로 읽는 100% 클라이언트 사이드 뷰어" />
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%232563eb'/%3E%3Cstop offset='1' stop-color='%234f46e5'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='16' fill='url(%23g)'/%3E%3Ctext x='32' y='43' text-anchor='middle' font-family='sans-serif' font-weight='800' font-size='32' fill='%23ffffff'%3E%ED%95%9C%3C/text%3E%3C/svg%3E" />
+
+  <!-- 한국어 오픈소스 폴백 폰트 (원본 글꼴과 유사한 조판/줄바꿈 유지) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nanum+Gothic:wght@400;700&family=Nanum+Myeongjo:wght@400;700&family=Noto+Sans+KR:wght@400;500;700&family=Noto+Serif+KR:wght@400;700&display=swap" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css" />
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <!-- 상단 헤더 바 -->
+    <header class="app-header">
+      <div class="header-left">
+        <a href="./" class="brand" id="brand-home" title="한글 뷰어 처음으로">
+          <span class="brand-badge" aria-hidden="true">한</span>
+          <span class="brand-title">한글 뷰어</span>
+        </a>
+        <span class="privacy-pill" title="모든 문서는 서버 전송 없이 브라우저 내부(WebAssembly)에서만 처리됩니다">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+          </svg>
+          <span>100% 브라우저 로컬 처리</span>
+        </span>
+      </div>
+
+      <div class="header-actions">
+        <div class="engine-status is-loading" id="engine-status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <span id="engine-status-text">엔진 불러오는 중... 0%</span>
+        </div>
+
+        <button type="button" class="btn btn-primary" id="btn-open-file" title="파일 열기 (Ctrl+O)">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+            <line x1="12" y1="18" x2="12" y2="12"></line>
+            <line x1="9" y1="15" x2="15" y2="15"></line>
+          </svg>
+          <span>파일 열기</span>
+        </button>
+
+        <button type="button" class="btn btn-secondary" id="btn-open-url" title="웹 URL 또는 GitHub 파일 링크 열기">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+          <span>URL 열기</span>
+        </button>
+
+        <button type="button" class="btn btn-secondary doc-only" id="btn-search-toggle" title="문서 검색 (Ctrl+F)" disabled>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <span class="hide-sm">검색</span>
+        </button>
+
+        <button type="button" class="btn btn-secondary doc-only" id="btn-extract-text" title="전체 텍스트 추출 및 복사" disabled>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="17" y1="10" x2="3" y2="10"></line>
+            <line x1="21" y1="6" x2="3" y2="6"></line>
+            <line x1="21" y1="14" x2="3" y2="14"></line>
+            <line x1="17" y1="18" x2="3" y2="18"></line>
+          </svg>
+          <span class="hide-sm">텍스트 추출</span>
+        </button>
+
+        <button type="button" class="btn btn-secondary doc-only" id="btn-print" title="인쇄 또는 PDF로 저장" disabled>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="6 9 6 2 18 2 18 9"></polyline>
+            <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+            <rect x="6" y="14" width="12" height="8"></rect>
+          </svg>
+          <span class="hide-sm">인쇄 / PDF</span>
+        </button>
+
+        <button type="button" class="btn btn-icon" id="btn-theme" title="라이트 / 다크 테마 전환" aria-label="테마 전환">
+          <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+          </svg>
+          <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="5"></circle>
+            <line x1="12" y1="1" x2="12" y2="3"></line>
+            <line x1="12" y1="21" x2="12" y2="23"></line>
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+            <line x1="1" y1="12" x2="3" y2="12"></line>
+            <line x1="21" y1="12" x2="23" y2="12"></line>
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 열린 문서 탭 바 -->
+    <div class="tab-bar hidden" id="tab-bar" role="tablist" aria-label="열린 문서 목록"></div>
+
+    <!-- 문서 제어 툴바 -->
+    <div class="doc-toolbar hidden" id="doc-toolbar">
+      <div class="toolbar-group">
+        <button type="button" class="btn btn-icon" id="btn-sidebar-toggle" title="사이드바 열기/닫기" aria-label="사이드바 토글">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+            <line x1="9" y1="3" x2="9" y2="21"></line>
+          </svg>
+        </button>
+
+        <div class="divider"></div>
+
+        <button type="button" class="btn btn-icon" id="btn-prev-page" title="이전 페이지" aria-label="이전 페이지">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 18 9 12 15 6"></polyline>
+          </svg>
+        </button>
+        <div class="page-jump">
+          <input type="number" id="page-input" min="1" value="1" aria-label="현재 페이지 번호" />
+          <span class="page-slash">/</span>
+          <span id="page-total">1</span>
+        </div>
+        <button type="button" class="btn btn-icon" id="btn-next-page" title="다음 페이지" aria-label="다음 페이지">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="9 18 15 12 9 6"></polyline>
+          </svg>
+        </button>
+      </div>
+
+      <div class="toolbar-group">
+        <button type="button" class="btn btn-icon" id="btn-zoom-out" title="축소 (-)" aria-label="축소">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+        <select id="zoom-select" class="zoom-select" aria-label="확대/축소 비율">
+          <option value="0.5">50%</option>
+          <option value="0.75">75%</option>
+          <option value="1" selected>100%</option>
+          <option value="1.25">125%</option>
+          <option value="1.5">150%</option>
+          <option value="2">200%</option>
+          <option value="fit-width">폭 맞춤</option>
+          <option value="fit-page">쪽 맞춤</option>
+        </select>
+        <button type="button" class="btn btn-icon" id="btn-zoom-in" title="확대 (+)" aria-label="확대">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+        </button>
+      </div>
+
+      <div class="toolbar-group">
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-save-hwpx" title="현재 문서를 .hwpx 파일로 저장">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+            <polyline points="7 10 12 15 17 10"></polyline>
+            <line x1="12" y1="15" x2="12" y2="3"></line>
+          </svg>
+          <span>HWPX 저장</span>
+        </button>
+        <button type="button" class="btn btn-ghost btn-sm" id="btn-save-txt" title="현재 문서의 텍스트를 .txt로 저장">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+          <span>TXT 저장</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 플로팅 검색 바 -->
+    <div class="search-bar hidden" id="search-bar" role="search" aria-label="문서 본문 검색">
+      <div class="search-input-row">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input type="text" id="search-input" placeholder="본문 및 표 내용 검색..." autocomplete="off" />
+        <span class="search-count" id="search-count">0 / 0</span>
+        <button type="button" class="btn btn-icon btn-xs" id="btn-search-prev" title="이전 검색 결과" aria-label="이전 결과">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="18 15 12 9 6 15"></polyline></svg>
+        </button>
+        <button type="button" class="btn btn-icon btn-xs" id="btn-search-next" title="다음 검색 결과" aria-label="다음 결과">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="6 9 12 15 18 9"></polyline></svg>
+        </button>
+        <button type="button" class="btn btn-icon btn-xs" id="btn-search-close" title="검색 닫기 (Esc)" aria-label="검색 닫기">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="search-results hidden" id="search-results"></div>
+    </div>
+
+    <!-- 메인 워크스페이스 -->
+    <main class="workspace">
+      <!-- 시작 화면 (문서가 열리기 전) -->
+      <section class="welcome-screen" id="welcome-screen">
+        <div class="welcome-container">
+          <div class="drop-hero" id="welcome-dropzone" tabindex="0" role="region" aria-label="파일 붙여넣기 및 드롭 영역">
+            <div class="hero-icon" aria-hidden="true">
+              <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <path d="M9 15h6"></path>
+                <path d="M12 12v6"></path>
+              </svg>
+            </div>
+            <h1 class="hero-title">여기에 한글 파일(.hwpx, .hwp)을 붙여넣기(<kbd>Ctrl</kbd>+<kbd>V</kbd>)하거나 끌어다 놓으세요</h1>
+            <p class="hero-subtitle">
+              탐색기·Finder에서 파일을 복사(<kbd>Ctrl</kbd>+<kbd>C</kbd>)해 바로 붙여넣거나, GitHub 파일 링크·직접 URL을 붙여넣어 별도 프로그램 설치 없이 즉시 열람할 수 있습니다.
+            </p>
+
+            <div class="hero-actions">
+              <button type="button" class="btn btn-primary btn-lg" id="btn-welcome-file">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="17 8 12 3 7 8"></polyline>
+                  <line x1="12" y1="3" x2="12" y2="15"></line>
+                </svg>
+                <span>파일 선택</span>
+              </button>
+              <button type="button" class="btn btn-secondary btn-lg" id="btn-welcome-url">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                  <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+                </svg>
+                <span>URL / GitHub 링크 열기</span>
+              </button>
+              <button type="button" class="btn btn-outline btn-lg" id="btn-sample-hwpx">
+                <span>샘플 HWPX 체험</span>
+              </button>
+              <button type="button" class="btn btn-outline btn-lg" id="btn-sample-hwp">
+                <span>샘플 HWP 체험</span>
+              </button>
+            </div>
+
+            <div class="supported-formats">
+              <span class="format-chip">.hwpx (OWPML)</span>
+              <span class="format-chip">.hwp (HWP 5.0 / 3.0)</span>
+              <span class="format-chip">.hml (HWPML)</span>
+              <span class="format-chip">암호 문서 지원</span>
+            </div>
+          </div>
+
+          <div class="feature-grid">
+            <article class="feature-card">
+              <div class="feature-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              </div>
+              <h2>Ctrl+V 파일 &amp; URL 붙여넣기</h2>
+              <p>복사한 한글 파일이나 GitHub 파일 주소(<code>blob</code> 링크 자동 변환)를 화면 어디서나 <code>Ctrl+V</code>로 바로 열 수 있습니다.</p>
+            </article>
+            <article class="feature-card">
+              <div class="feature-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+              </div>
+              <h2>HWP 5.0 · HWPX · 암호 문서</h2>
+              <p>표, 이미지, 다단, 머리말/꼬리말, 수식, 각주는 물론 비밀번호로 잠긴 문서까지 정밀한 벡터 SVG로 렌더링합니다.</p>
+            </article>
+            <article class="feature-card">
+              <div class="feature-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+              </div>
+              <h2>서버 업로드 없는 로컬 처리</h2>
+              <p>모든 파싱과 렌더링은 사용자의 브라우저 내부(WebAssembly)에서 실행되므로 민감한 문서도 외부 서버로 전송되지 않습니다.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <!-- 문서 리더 화면 -->
+      <section class="reader-layout hidden" id="reader-layout">
+        <aside class="sidebar" id="sidebar" aria-label="문서 탐색 패널">
+          <div class="sidebar-tabs" role="tablist">
+            <button type="button" class="sidebar-tab is-active" data-sidebar-tab="thumbs" role="tab" aria-selected="true">미리보기</button>
+            <button type="button" class="sidebar-tab" data-sidebar-tab="outline" role="tab" aria-selected="false">목차</button>
+            <button type="button" class="sidebar-tab" data-sidebar-tab="info" role="tab" aria-selected="false">문서 정보</button>
+          </div>
+          <div class="sidebar-body">
+            <div class="sidebar-pane is-active" id="pane-thumbs" role="tabpanel"></div>
+            <div class="sidebar-pane" id="pane-outline" role="tabpanel"></div>
+            <div class="sidebar-pane" id="pane-info" role="tabpanel"></div>
+          </div>
+        </aside>
+
+        <div class="viewport" id="viewport" tabindex="0">
+          <div class="pages-container" id="pages-container"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 숨겨진 파일 선택 입력 -->
+  <input type="file" id="file-input" accept=".hwpx,.hwp,.hml" multiple hidden />
+
+  <!-- 전체 창 드래그 앤 드롭 오버레이 -->
+  <div class="drop-overlay hidden" id="drop-overlay" aria-hidden="true">
+    <div class="drop-overlay-box">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="17 8 12 3 7 8"></polyline>
+        <line x1="12" y1="3" x2="12" y2="15"></line>
+      </svg>
+      <p>여기에 놓아 한글 문서 열기</p>
+      <span>.hwpx, .hwp, .hml 파일을 여러 개 동시에 열 수 있습니다</span>
+    </div>
+  </div>
+
+  <!-- URL / GitHub 링크 열기 모달 -->
+  <div class="modal-backdrop hidden" id="url-modal" role="dialog" aria-modal="true" aria-labelledby="url-modal-title">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 id="url-modal-title">URL / GitHub 파일 링크 열기</h2>
+        <button type="button" class="btn btn-icon btn-xs modal-close" data-close-modal="url-modal" aria-label="닫기">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <form id="url-form" class="modal-body">
+        <label class="field-label" for="url-input">파일 URL 입력</label>
+        <input type="url" id="url-input" class="text-input" placeholder="https://github.com/user/repo/blob/main/document.hwpx" required />
+        <p class="field-hint">
+          • GitHub의 일반 파일 주소(<code>github.com/.../blob/...</code>)를 입력하면 자동으로 <code>raw.githubusercontent.com</code>으로 변환해 불러옵니다.<br />
+          • 공유용 링크를 만들려면 뷰어 주소 뒤에 <code>?url=파일주소</code>를 붙여 전달하세요. (CORS를 허용하는 공개 URL만 브라우저에서 직접 열 수 있습니다.)
+        </p>
+        <p class="field-error hidden" id="url-error"></p>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-close-modal="url-modal">취소</button>
+          <button type="submit" class="btn btn-primary" id="btn-url-submit">불러오기</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 암호 입력 모달 -->
+  <div class="modal-backdrop hidden" id="password-modal" role="dialog" aria-modal="true" aria-labelledby="password-modal-title">
+    <div class="modal-card modal-card-sm">
+      <div class="modal-header">
+        <h2 id="password-modal-title">암호로 보호된 문서</h2>
+        <button type="button" class="btn btn-icon btn-xs modal-close" data-close-modal="password-modal" aria-label="닫기">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <form id="password-form" class="modal-body">
+        <p class="field-hint" id="password-filename"></p>
+        <label class="field-label" for="password-input">문서 비밀번호</label>
+        <input type="password" id="password-input" class="text-input" placeholder="비밀번호를 입력하세요" autocomplete="current-password" required />
+        <p class="field-error hidden" id="password-error"></p>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-close-modal="password-modal">취소</button>
+          <button type="submit" class="btn btn-primary">열기</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- 텍스트 추출 모달 -->
+  <div class="modal-backdrop hidden" id="text-modal" role="dialog" aria-modal="true" aria-labelledby="text-modal-title">
+    <div class="modal-card modal-card-lg">
+      <div class="modal-header">
+        <h2 id="text-modal-title">문서 텍스트 추출</h2>
+        <button type="button" class="btn btn-icon btn-xs modal-close" data-close-modal="text-modal" aria-label="닫기">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <textarea id="extracted-textarea" class="extracted-textarea" readonly spellcheck="false"></textarea>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" id="btn-download-txt">TXT 다운로드</button>
+          <button type="button" class="btn btn-primary" id="btn-copy-text">전체 복사</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 토스트 알림 컨테이너 -->
+  <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
