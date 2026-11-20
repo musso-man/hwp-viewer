@@ -915,6 +915,8 @@ body {
   overflow: auto;
   padding: 24px 20px 48px;
   background: var(--bg-app);
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
 }
 
 .viewport:focus {
@@ -926,7 +928,10 @@ body {
   flex-direction: column;
   align-items: center;
   gap: 20px;
+  width: max-content;
+  min-width: 100%;
   margin: 0 auto;
+  transform-origin: 0 0;
 }
 
 .page-card {

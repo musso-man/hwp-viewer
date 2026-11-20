@@ -301,11 +301,20 @@ function ensureEngineReady() {
 }
 
 // ===== 테마 =====
+function syncNativeSystemTheme(theme) {
+  try {
+    window.AndroidHwpBridge?.setSystemTheme?.(theme === 'dark');
+  } catch {
+    // ignore
+  }
+}
+
 function initTheme() {
   const saved = localStorage.getItem('hwp-viewer-theme');
   const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   const theme = saved || (prefersDark ? 'dark' : 'light');
   document.documentElement.setAttribute('data-theme', theme);
+  syncNativeSystemTheme(theme);
 }
 
 function toggleTheme() {
@@ -313,6 +322,7 @@ function toggleTheme() {
   const next = current === 'dark' ? 'light' : 'dark';
   document.documentElement.setAttribute('data-theme', next);
   localStorage.setItem('hwp-viewer-theme', next);
+  syncNativeSystemTheme(next);
 }
 
 // ===== 모달 제어 =====
@@ -754,13 +764,29 @@ function updateDocControlsState() {
 }
 
 function syncZoomSelectUI(tab) {
+  let customOpt = el.zoomSelect.querySelector('option[data-custom-zoom]');
   if (tab.zoomMode === 'fit-width') {
+    if (customOpt) customOpt.remove();
     el.zoomSelect.value = 'fit-width';
   } else if (tab.zoomMode === 'fit-page') {
+    if (customOpt) customOpt.remove();
     el.zoomSelect.value = 'fit-page';
   } else {
     const exact = ZOOM_STEPS.find((z) => Math.abs(z - tab.zoom) < 0.01);
-    el.zoomSelect.value = exact ? String(exact) : '1';
+    if (exact) {
+      if (customOpt) customOpt.remove();
+      el.zoomSelect.value = String(exact);
+    } else {
+      const pct = Math.round(tab.zoom * 100);
+      if (!customOpt) {
+        customOpt = document.createElement('option');
+        customOpt.dataset.customZoom = '1';
+        el.zoomSelect.appendChild(customOpt);
+      }
+      customOpt.value = String(tab.zoom);
+      customOpt.textContent = `${pct}%`;
+      el.zoomSelect.value = customOpt.value;
+    }
   }
 }
 
@@ -861,10 +887,132 @@ function applyPageCardDimensions(tab) {
 function applyZoomMode(tab, mode, numericZoom) {
   tab.zoomMode = mode;
   if (mode === 'manual' && typeof numericZoom === 'number') {
-    tab.zoom = Math.min(3, Math.max(0.3, numericZoom));
+    tab.zoom = Math.min(4, Math.max(0.3, numericZoom));
   }
   applyPageCardDimensions(tab);
   syncZoomSelectUI(tab);
+}
+
+function bindViewportTouchZoom() {
+  let pinch = null;
+  let lastTap = null;
+
+  const touchDistance = (t0, t1) => Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+
+  const commitZoomAroundPoint = (tab, fromZoom, toZoom, vpX, vpY) => {
+    const originX = el.viewport.scrollLeft + vpX;
+    const originY = el.viewport.scrollTop + vpY;
+    applyZoomMode(tab, 'manual', toZoom);
+    const actualZoom = computeZoomFactor(tab);
+    const ratio = fromZoom > 0 ? actualZoom / fromZoom : 1;
+    el.viewport.scrollLeft = Math.max(0, originX * ratio - vpX);
+    el.viewport.scrollTop = Math.max(0, originY * ratio - vpY);
+  };
+
+  el.viewport.addEventListener(
+    'touchstart',
+    (e) => {
+      const tab = getActiveTab();
+      if (!tab) return;
+
+      if (e.touches.length === 2) {
+        lastTap = null;
+        const [t0, t1] = e.touches;
+        const dist = touchDistance(t0, t1);
+        if (dist < 10) return;
+
+        const rect = el.viewport.getBoundingClientRect();
+        const midX = (t0.clientX + t1.clientX) / 2 - rect.left;
+        const midY = (t0.clientY + t1.clientY) / 2 - rect.top;
+        const startZoom = computeZoomFactor(tab);
+
+        pinch = {
+          tab,
+          startDist: dist,
+          startZoom,
+          targetZoom: startZoom,
+          midX,
+          midY,
+          originX: el.viewport.scrollLeft + midX,
+          originY: el.viewport.scrollTop + midY,
+        };
+        el.pagesContainer.style.willChange = 'transform';
+      } else if (e.touches.length === 1 && !pinch) {
+        const t = e.touches[0];
+        const now = Date.now();
+        if (
+          lastTap &&
+          now - lastTap.time < 280 &&
+          Math.hypot(t.clientX - lastTap.x, t.clientY - lastTap.y) < 28
+        ) {
+          e.preventDefault();
+          const rect = el.viewport.getBoundingClientRect();
+          const vpX = t.clientX - rect.left;
+          const vpY = t.clientY - rect.top;
+          const curZoom = computeZoomFactor(tab);
+          const fitW = Math.max(280, el.viewport.clientWidth - 48) / BASE_A4_WIDTH_PX;
+
+          if (curZoom > fitW * 1.15) {
+            const originY = el.viewport.scrollTop + vpY;
+            applyZoomMode(tab, 'fit-width');
+            const nextZoom = computeZoomFactor(tab);
+            const ratio = curZoom > 0 ? nextZoom / curZoom : 1;
+            el.viewport.scrollLeft = 0;
+            el.viewport.scrollTop = Math.max(0, originY * ratio - vpY);
+          } else {
+            const target = Math.min(4, Math.max(1.25, fitW * 2));
+            commitZoomAroundPoint(tab, curZoom, target, vpX, vpY);
+          }
+          lastTap = null;
+        } else {
+          lastTap = { time: now, x: t.clientX, y: t.clientY };
+        }
+      }
+    },
+    { passive: false }
+  );
+
+  el.viewport.addEventListener(
+    'touchmove',
+    (e) => {
+      if (!pinch || e.touches.length !== 2) return;
+      e.preventDefault();
+
+      const [t0, t1] = e.touches;
+      const dist = touchDistance(t0, t1);
+      if (dist < 10) return;
+
+      const rawScale = dist / pinch.startDist;
+      const targetZoom = Math.min(4, Math.max(0.3, pinch.startZoom * rawScale));
+      pinch.targetZoom = targetZoom;
+
+      const visualScale = targetZoom / pinch.startZoom;
+      el.pagesContainer.style.transformOrigin = `${pinch.originX}px ${pinch.originY}px`;
+      el.pagesContainer.style.transform = `scale(${visualScale})`;
+    },
+    { passive: false }
+  );
+
+  const finishPinch = () => {
+    if (!pinch) return;
+    const p = pinch;
+    pinch = null;
+
+    el.pagesContainer.style.transform = '';
+    el.pagesContainer.style.transformOrigin = '0 0';
+    el.pagesContainer.style.willChange = '';
+
+    if (Math.abs(p.targetZoom - p.startZoom) > 0.01) {
+      commitZoomAroundPoint(p.tab, p.startZoom, p.targetZoom, p.midX, p.midY);
+    }
+  };
+
+  el.viewport.addEventListener('touchend', (e) => {
+    if (pinch && e.touches.length < 2) {
+      finishPinch();
+    }
+  });
+  el.viewport.addEventListener('touchcancel', finishPinch);
 }
 
 function renderSinglePage(tab, pageIdx, card) {
@@ -1501,6 +1649,7 @@ function bindEvents() {
     if (Number.isFinite(val)) jumpToPage(val);
   });
   el.viewport.addEventListener('scroll', handleViewportScroll, { passive: true });
+  bindViewportTouchZoom();
 
   // 줌 제어
   el.zoomSelect.addEventListener('change', () => {
@@ -1518,7 +1667,7 @@ function bindEvents() {
     const tab = getActiveTab();
     if (!tab) return;
     const cur = computeZoomFactor(tab);
-    const next = ZOOM_STEPS.find((z) => z > cur + 0.03) || Math.min(3, cur + 0.25);
+    const next = ZOOM_STEPS.find((z) => z > cur + 0.03) || Math.min(4, cur + 0.25);
     applyZoomMode(tab, 'manual', next);
   });
 

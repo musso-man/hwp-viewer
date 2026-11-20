@@ -3,7 +3,9 @@ package com.mussoman.hwpviewer;
 import android.content.ContentResolver;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.res.Configuration;
 import android.database.Cursor;
+import android.graphics.Color;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -11,8 +13,15 @@ import android.os.Environment;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
 import android.util.Base64;
+import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
+
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -28,17 +37,57 @@ import java.util.Deque;
 
 public class MainActivity extends BridgeActivity {
     private static final int MAX_FILE_BYTES = 80 * 1024 * 1024;
+    private static final int LIGHT_BAR_COLOR = Color.parseColor("#FFFFFF");
+    private static final int DARK_BAR_COLOR = Color.parseColor("#141923");
+
     private final Deque<String> pendingFilesJson = new ArrayDeque<>();
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        setupSystemBarInsets();
+
+        boolean nightMode = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
+        applySystemBarAppearance(nightMode);
+
         if (getBridge() != null && getBridge().getWebView() != null) {
             getBridge().getWebView().addJavascriptInterface(new AndroidHwpBridge(), "AndroidHwpBridge");
         }
 
         handleIncomingIntent(getIntent(), true);
+    }
+
+    private void setupSystemBarInsets() {
+        View contentView = findViewById(android.R.id.content);
+        if (contentView == null) return;
+
+        ViewCompat.setOnApplyWindowInsetsListener(contentView, (view, windowInsets) -> {
+            Insets bars = windowInsets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout()
+            );
+            view.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            return WindowInsetsCompat.CONSUMED;
+        });
+        ViewCompat.requestApplyInsets(contentView);
+    }
+
+    private void applySystemBarAppearance(boolean isDark) {
+        int bgColor = isDark ? DARK_BAR_COLOR : LIGHT_BAR_COLOR;
+        View contentView = findViewById(android.R.id.content);
+        if (contentView != null) {
+            contentView.setBackgroundColor(bgColor);
+        }
+
+        View decorView = getWindow().getDecorView();
+        decorView.setBackgroundColor(bgColor);
+
+        WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(getWindow(), decorView);
+        if (controller != null) {
+            controller.setAppearanceLightStatusBars(!isDark);
+            controller.setAppearanceLightNavigationBars(!isDark);
+        }
     }
 
     @Override
@@ -146,6 +195,11 @@ public class MainActivity extends BridgeActivity {
     }
 
     private class AndroidHwpBridge {
+        @JavascriptInterface
+        public void setSystemTheme(boolean isDark) {
+            runOnUiThread(() -> applySystemBarAppearance(isDark));
+        }
+
         @JavascriptInterface
         public String consumePendingFile() {
             synchronized (pendingFilesJson) {
