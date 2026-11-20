@@ -1,0 +1,14 @@
+node_modules/
+www/
+
+# Android / Gradle build outputs
+android/.gradle/
+android/build/
+android/app/build/
+android/app/src/main/assets/public/
+android/local.properties
+android/.idea/
+*.iml
+*.keystore
+*.jks
+.DS_Store

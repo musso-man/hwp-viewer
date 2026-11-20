@@ -1,0 +1,11 @@
+{
+  "appId": "com.mussoman.hwpviewer",
+  "appName": "한글 뷰어",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

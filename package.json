@@ -1,0 +1,18 @@
+{
+  "name": "hwp-viewer",
+  "version": "1.0.0",
+  "description": "HWP/HWPX client-side web & Android viewer",
+  "private": true,
+  "scripts": {
+    "prepare:android": "node scripts/prepare-web.mjs",
+    "sync:android": "npm run prepare:android && npx cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "@rhwp/core": "0.9.1"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.4.3"
+  }
+}

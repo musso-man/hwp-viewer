@@ -265,23 +265,32 @@ async function loadEngineFromBase(baseUrl) {
   return mod.HwpDocument;
 }
 
+function isNativeApp() {
+  return Boolean(window.Capacitor?.isNativePlatform?.() || window.AndroidHwpBridge);
+}
+
+function getEngineBases() {
+  return isNativeApp() ? ['./vendor/rhwp', ...CDN_BASES] : CDN_BASES;
+}
+
 function ensureEngineReady() {
   if (HwpDocumentClass) return Promise.resolve(HwpDocumentClass);
   if (enginePromise) return enginePromise;
 
   enginePromise = (async () => {
+    const bases = getEngineBases();
     let lastErr = null;
-    for (let i = 0; i < CDN_BASES.length; i++) {
+    for (let i = 0; i < bases.length; i++) {
       try {
         if (i > 0) {
           setEngineStatus('loading', '보조 서버에서 불러오는 중...');
         }
-        HwpDocumentClass = await loadEngineFromBase(CDN_BASES[i]);
+        HwpDocumentClass = await loadEngineFromBase(bases[i]);
         setEngineStatus('ready', '엔진 준비 완료');
         return HwpDocumentClass;
       } catch (err) {
         lastErr = err;
-        console.warn(`CDN 로드 실패 (${CDN_BASES[i]}):`, err);
+        console.warn(`엔진 로드 실패 (${bases[i]}):`, err);
       }
     }
     setEngineStatus('error', '엔진 로드 실패');
@@ -548,7 +557,7 @@ function registerOpenedDocument(name, bytes, doc) {
     pageCount,
     currentPage: 1,
     zoom: 1,
-    zoomMode: 'manual', // 'manual' | 'fit-width' | 'fit-page'
+    zoomMode: window.innerWidth <= 900 ? 'fit-width' : 'manual', // 'manual' | 'fit-width' | 'fit-page'
     renderedPages: new Set(),
     renderedThumbs: new Set(),
     pageDims: new Map(),
@@ -1299,7 +1308,39 @@ function buildCombinedPlainText(tab) {
   return texts.map((t, i) => `--- ${i + 1}페이지 ---\n${t}`).join('\n\n');
 }
 
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 function downloadBlob(data, mime, filename) {
+  if (window.AndroidHwpBridge?.saveFile) {
+    const bytes =
+      data instanceof Uint8Array
+        ? data
+        : typeof data === 'string'
+          ? new TextEncoder().encode(data)
+          : new Uint8Array(data);
+    const result = window.AndroidHwpBridge.saveFile(filename, mime, bytesToBase64(bytes));
+    if (typeof result === 'string' && result.startsWith('error:')) {
+      throw new Error(result.slice(6));
+    }
+    return;
+  }
+
   const blob = new Blob([data], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1674,11 +1715,39 @@ function bindEvents() {
   });
 }
 
+let drainingAndroidFiles = false;
+async function consumeAndroidPendingFiles() {
+  if (!window.AndroidHwpBridge?.consumePendingFile || drainingAndroidFiles) return;
+  drainingAndroidFiles = true;
+  try {
+    while (true) {
+      const raw = window.AndroidHwpBridge.consumePendingFile();
+      if (!raw) break;
+      const payload = safeJsonParse(raw);
+      if (!payload?.base64) continue;
+      const bytes = base64ToBytes(payload.base64);
+      const name = payload.name || `document.${detectFormatFromMagic(bytes) || 'hwpx'}`;
+      await openBytes(name, bytes);
+    }
+  } catch (err) {
+    showToast(`외부 파일을 열지 못했습니다: ${formatDetectionError(err)}`, 'error', 5200);
+  } finally {
+    drainingAndroidFiles = false;
+  }
+}
+
 // ===== 초기화 =====
 async function bootstrap() {
   initTheme();
   if (window.innerWidth <= 900) {
     el.sidebar.classList.add('is-collapsed');
+  }
+  if (isNativeApp()) {
+    // 안드로이드 파일 선택기에서 .hwpx/.hwp MIME 미등록으로 비활성화되는 문제 방지
+    el.fileInput.removeAttribute('accept');
+    window.addEventListener('android-hwp-file', () => {
+      consumeAndroidPendingFiles();
+    });
   }
   bindEvents();
   updateDocControlsState();
@@ -1687,6 +1756,10 @@ async function bootstrap() {
   ensureEngineReady().catch(() => {
     // 에러 상태는 엔진 배지에서 안내됨
   });
+
+  if (isNativeApp()) {
+    await consumeAndroidPendingFiles();
+  }
 
   // ?url=... 쿼리 파라미터가 있으면 자동 열기
   const paramUrl = new URLSearchParams(window.location.search).get('url');
