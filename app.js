@@ -1,5 +1,6 @@
 import { buildPdfFromJpegs, svgStringToJpegPage } from './pdf-utils.js';
 import { initDocumentScanner } from './scanner.js';
+import { openPdfDocument, openDocxDocument, openDocDocument, openTxtDocument } from './doc-adapters.js';
 
 const CDN_BASES = [
   'https://cdn.jsdelivr.net/npm/@rhwp/core@0.9.1',
@@ -131,15 +132,28 @@ function safeJsonParse(str) {
 }
 
 function stripExt(name) {
-  return name.replace(/\.(hwpx|hwp|hml)$/i, '');
+  return name.replace(/\.(hwpx|hwp|hml|pdf|docx|doc|txt)$/i, '');
 }
 
 function detectFormatFromMagic(bytes, fileName = '') {
+  const extMatch = fileName.match(/\.(hwpx|hwp|hml|pdf|docx|doc|txt)$/i);
+  const ext = extMatch ? extMatch[1].toLowerCase() : null;
+
+  if (bytes.length >= 5) {
+    // %PDF-
+    if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46 && bytes[4] === 0x2d) {
+      return 'pdf';
+    }
+  }
   if (bytes.length >= 4) {
+    // ZIP (HWPX 또는 DOCX)
     if (bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
+      if (ext === 'docx') return 'docx';
       return 'hwpx';
     }
+    // OLE2 (HWP 5.0 또는 Word DOC)
     if (bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) {
+      if (ext === 'doc') return 'doc';
       return 'hwp';
     }
   }
@@ -148,12 +162,11 @@ function detectFormatFromMagic(bytes, fileName = '') {
     if (head.startsWith('HWP Document File')) return 'hwp3';
     if (head.trimStart().startsWith('<?xml') || head.includes('<HWPML')) return 'hml';
   }
-  const m = fileName.match(/\.(hwpx|hwp|hml)$/i);
-  return m ? m[1].toLowerCase() : null;
+  return ext;
 }
 
 function isSupportedFile(file, bytes) {
-  if (/\.(hwpx|hwp|hml)$/i.test(file.name || '')) return true;
+  if (/\.(hwpx|hwp|hml|pdf|docx|doc|txt)$/i.test(file.name || '')) return true;
   if (bytes) {
     return detectFormatFromMagic(bytes, file.name) !== null;
   }
@@ -448,22 +461,27 @@ async function openFileObjects(fileList) {
 }
 
 async function openBytes(name, bytes) {
-  let HwpDocument;
-  try {
-    showToast(`${name} 여는 중...`, 'info', 1600);
-    HwpDocument = await ensureEngineReady();
-  } catch (err) {
-    showToast(`엔진을 불러오지 못했습니다: ${formatDetectionError(err)}`, 'error', 5000);
-    return;
-  }
+  const fmt = detectFormatFromMagic(bytes, name) || 'hwpx';
+  showToast(`${name} 여는 중...`, 'info', 1600);
 
   let doc;
   try {
-    doc = new HwpDocument(bytes);
+    if (fmt === 'pdf') {
+      doc = await openPdfDocument(bytes, null, isNativeApp());
+    } else if (fmt === 'docx') {
+      doc = await openDocxDocument(bytes, isNativeApp());
+    } else if (fmt === 'doc') {
+      doc = openDocDocument(bytes);
+    } else if (fmt === 'txt') {
+      doc = openTxtDocument(bytes);
+    } else {
+      const HwpDocument = await ensureEngineReady();
+      doc = new HwpDocument(bytes);
+    }
   } catch (err) {
     const errMsg = formatDetectionError(err);
     if (isPasswordError(errMsg)) {
-      pendingEncrypted = { name, bytes };
+      pendingEncrypted = { name, bytes, format: fmt };
       el.passwordFilename.textContent = `"${name}" 파일은 비밀번호로 보호되어 있습니다.`;
       el.passwordError.classList.add('hidden');
       el.passwordInput.value = '';
@@ -485,9 +503,14 @@ async function submitPassword(e) {
   if (!pw) return;
 
   try {
-    const HwpDocument = await ensureEngineReady();
-    const doc = HwpDocument.openWithPassword(pendingEncrypted.bytes, pw);
-    const { name, bytes } = pendingEncrypted;
+    const { name, bytes, format } = pendingEncrypted;
+    let doc;
+    if (format === 'pdf') {
+      doc = await openPdfDocument(bytes, pw, isNativeApp());
+    } else {
+      const HwpDocument = await ensureEngineReady();
+      doc = HwpDocument.openWithPassword(bytes, pw);
+    }
     closeModal('password-modal');
     registerOpenedDocument(name, bytes, doc);
   } catch (err) {
@@ -583,6 +606,7 @@ function updateDocControlsState() {
   const tab = getActiveTab();
   const hasDoc = Boolean(tab);
 
+  document.body.classList.toggle('has-doc', hasDoc);
   el.btnSearchToggle.classList.toggle('hidden', !hasDoc);
   el.btnSavePdf.classList.toggle('hidden', !hasDoc);
 
@@ -876,6 +900,35 @@ function renderSinglePage(tab, pageIdx, card) {
   if (!tab || tab.renderedPages.has(pageIdx)) return;
   if (getActiveTab()?.id !== tab.id) return;
 
+  if (tab.doc.isPdfAdapter) {
+    tab.renderedPages.add(pageIdx);
+    const wrap = card.querySelector('.page-svg-wrap');
+    if (!wrap) return;
+    tab.doc
+      .renderPdfPageInto(pageIdx, wrap)
+      .then((info) => {
+        if (getActiveTab()?.id !== tab.id) return;
+        const nat = {
+          baseWidth: BASE_A4_WIDTH_PX,
+          baseHeight: Math.round(BASE_A4_WIDTH_PX * info.ratio),
+          ratio: info.ratio,
+        };
+        tab.pageDims.set(pageIdx, nat);
+        const factor = computeZoomFactor(tab);
+        const widthPx = Math.max(96, Math.round(nat.baseWidth * factor));
+        card.style.width = `${widthPx}px`;
+        card.style.minHeight = `${Math.round(widthPx * nat.ratio)}px`;
+        if (activeSearchQuery) {
+          highlightSearchOnCard(card, pageIdx);
+        }
+      })
+      .catch((err) => {
+        tab.renderedPages.delete(pageIdx);
+        wrap.innerHTML = `<div class="page-placeholder">${pageIdx + 1}페이지를 렌더링하지 못했습니다: ${escapeHtml(formatDetectionError(err))}</div>`;
+      });
+    return;
+  }
+
   try {
     const svg = scopeSvgIds(tab.doc.renderPageSvg(pageIdx));
     const nat = parseSvgNaturalSize(svg);
@@ -912,6 +965,14 @@ function renderSinglePage(tab, pageIdx, card) {
 function renderSingleThumb(tab, pageIdx, previewEl) {
   if (!tab || tab.renderedThumbs.has(pageIdx)) return;
   if (getActiveTab()?.id !== tab.id) return;
+
+  if (tab.doc.isPdfAdapter) {
+    tab.renderedThumbs.add(pageIdx);
+    tab.doc.renderPdfThumbInto(pageIdx, previewEl).catch(() => {
+      previewEl.textContent = `${pageIdx + 1}`;
+    });
+    return;
+  }
 
   try {
     const svg = scopeSvgIds(tab.doc.renderPageSvg(pageIdx));
@@ -1260,7 +1321,7 @@ function refreshAllSearchHighlights() {
   }
 }
 
-function runSearch(query) {
+async function runSearch(query) {
   const tab = getActiveTab();
   if (!tab) return;
 
@@ -1275,6 +1336,12 @@ function runSearch(query) {
     el.searchResults.classList.add('hidden');
     el.searchResults.innerHTML = '';
     return;
+  }
+
+  if (tab.doc.isPdfAdapter && typeof tab.doc.ensureAllPageTexts === 'function') {
+    await tab.doc.ensureAllPageTexts();
+    tab.pageTexts.clear();
+    if (activeSearchQuery !== q || getActiveTab()?.id !== tab.id) return;
   }
 
   const lowerQ = q.toLowerCase();
@@ -1508,6 +1575,19 @@ async function exportActiveAsPdf() {
   el.btnSavePdf.disabled = true;
 
   try {
+    const filename = `${stripExt(tab.name)}.pdf`;
+    if (tab.doc.isPdfAdapter && typeof tab.doc.getOriginalPdfBytes === 'function') {
+      downloadBlob(tab.doc.getOriginalPdfBytes(), 'application/pdf', filename);
+      showToast(
+        isNativeApp()
+          ? `Downloads 폴더에 ${filename} 저장 완료`
+          : `${filename} 파일로 저장했습니다.`,
+        'success',
+        3800
+      );
+      return;
+    }
+
     showToast(`PDF 생성 중... (총 ${tab.pageCount}페이지)`, 'info', 2200);
     const pages = [];
     // 페이지 수가 많을 때는 메모리 절약을 위해 해상도를 자동 조절
@@ -1522,7 +1602,6 @@ async function exportActiveAsPdf() {
     }
 
     const pdfBytes = buildPdfFromJpegs(pages);
-    const filename = `${stripExt(tab.name)}.pdf`;
     downloadBlob(pdfBytes, 'application/pdf', filename);
     showToast(
       isNativeApp()
@@ -1545,6 +1624,7 @@ function bindEvents() {
   el.brandHome.addEventListener('click', (e) => {
     e.preventDefault();
     if (tabs.length > 0) {
+      document.body.classList.remove('has-doc');
       el.welcomeScreen.classList.remove('hidden');
       el.readerLayout.classList.add('hidden');
       el.docToolbar.classList.add('hidden');

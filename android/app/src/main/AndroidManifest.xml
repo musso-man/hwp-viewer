@@ -22,7 +22,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
-            <!-- 다른 앱(파일 관리자, 카카오톡, 메일 등)에서 HWP/HWPX/HML 파일 열기 -->
+            <!-- 다른 앱(파일 관리자, 카카오톡, 메일 등)에서 문서 파일 열기 -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -34,6 +34,10 @@
                 <data android:mimeType="application/vnd.hancom.hwp" />
                 <data android:mimeType="application/vnd.hancom.hwpx" />
                 <data android:mimeType="application/hwp+zip" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/msword" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="text/plain" />
                 <data android:mimeType="application/octet-stream" />
             </intent-filter>
 
@@ -50,9 +54,17 @@
                 <data android:pathPattern=".*\\.HWPX" />
                 <data android:pathPattern=".*\\.hml" />
                 <data android:pathPattern=".*\\.HML" />
+                <data android:pathPattern=".*\\.pdf" />
+                <data android:pathPattern=".*\\.PDF" />
+                <data android:pathPattern=".*\\.doc" />
+                <data android:pathPattern=".*\\.DOC" />
+                <data android:pathPattern=".*\\.docx" />
+                <data android:pathPattern=".*\\.DOCX" />
+                <data android:pathPattern=".*\\.txt" />
+                <data android:pathPattern=".*\\.TXT" />
             </intent-filter>
 
-            <!-- 공유(SEND)로 전달된 HWP/HWPX 파일 열기 -->
+            <!-- 공유(SEND)로 전달된 문서 파일 열기 -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -61,6 +73,10 @@
                 <data android:mimeType="application/vnd.hancom.hwp" />
                 <data android:mimeType="application/vnd.hancom.hwpx" />
                 <data android:mimeType="application/hwp+zip" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/msword" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+                <data android:mimeType="text/plain" />
                 <data android:mimeType="application/octet-stream" />
             </intent-filter>
 

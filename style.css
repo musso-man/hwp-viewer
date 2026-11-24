@@ -1297,20 +1297,69 @@ body {
 
 @media (max-width: 600px) {
   .app-header {
-    padding: 0 10px;
+    padding: 0 8px;
+    gap: 6px;
+  }
+
+  .header-left {
+    gap: 6px;
+    overflow: hidden;
+  }
+
+  .header-actions {
+    gap: 4px;
+    flex-shrink: 0;
+  }
+
+  body.has-doc .brand-title {
+    display: none;
   }
 
   .engine-status {
     display: none;
   }
 
-  .btn {
-    padding: 0 9px;
+  .app-header .btn {
+    padding: 0 8px;
+    gap: 4px;
+    font-size: 12.5px;
+    height: 32px;
+  }
+
+  .app-header .btn-icon {
+    width: 32px;
+    padding: 0;
   }
 
   .viewport {
     padding: 12px 10px 32px;
   }
+}
+
+/* ===== PDF Page Canvas & Text Highlight Overlay ===== */
+.page-svg-wrap {
+  position: relative;
+}
+
+.pdf-page-canvas {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.pdf-text-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.pdf-thumb-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 /* ===== Clean Home Action Cards ===== */

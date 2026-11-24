@@ -176,8 +176,8 @@
       <section class="welcome-screen" id="welcome-screen">
         <div class="welcome-inner">
           <div class="welcome-hero">
-            <h1>한글 문서 뷰어</h1>
-            <p>오프라인으로 HWP · HWPX 문서를 바로 읽고 PDF로 저장하세요</p>
+            <h1>문서 뷰어</h1>
+            <p>오프라인으로 HWP · HWPX · PDF · DOC · TXT 문서를 바로 읽고 PDF로 저장하세요</p>
           </div>
 
           <div class="home-action-grid">
@@ -191,8 +191,8 @@
                 </svg>
               </div>
               <div class="home-card-body">
-                <strong>한글 문서 열기</strong>
-                <span>.hwp · .hwpx · 암호 문서 지원</span>
+                <strong>문서 열기</strong>
+                <span>HWP · HWPX · PDF · DOC · TXT</span>
               </div>
             </button>
 
@@ -231,15 +231,15 @@
   </div>
 
   <!-- 숨김 파일 입력 -->
-  <input type="file" id="file-input" accept=".hwpx,.hwp,.hml" multiple hidden />
+  <input type="file" id="file-input" accept=".hwpx,.hwp,.hml,.pdf,.doc,.docx,.txt" multiple hidden />
   <input type="file" id="scanner-camera-input" accept="image/*" capture="environment" hidden />
   <input type="file" id="scanner-gallery-input" accept="image/*" multiple hidden />
 
   <!-- 전체 창 드래그 앤 드롭 오버레이 -->
   <div class="drop-overlay hidden" id="drop-overlay">
     <div class="drop-overlay-box">
-      <strong>여기에 한글 문서를 놓으세요</strong>
-      <span>.hwpx · .hwp · .hml</span>
+      <strong>여기에 문서를 놓으세요</strong>
+      <span>HWP · HWPX · PDF · DOC · DOCX · TXT</span>
     </div>
   </div>
 
