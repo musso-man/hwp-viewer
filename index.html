@@ -138,39 +138,40 @@
       </div>
     </div>
 
-    <!-- 글자 검색 바 -->
-    <div class="search-bar hidden" id="search-bar">
-      <div class="search-input-wrap">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="11" cy="11" r="8"></circle>
-          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-        </svg>
-        <input type="text" id="search-input" placeholder="문서 내 글자 검색..." autocomplete="off" />
-        <span class="search-count" id="search-count">0 / 0</span>
+    <!-- 이동 가능한 글자 검색 팝업 -->
+    <div class="search-bar hidden" id="search-bar" role="dialog" aria-label="글자 검색">
+      <div class="search-drag-handle" id="search-drag-handle" title="드래그하여 이동">
+        <span class="search-drag-grip" aria-hidden="true">⋮⋮</span>
+        <span class="search-drag-title">글자 검색</span>
+        <button type="button" class="btn btn-icon btn-xs" id="btn-search-close" title="검색 닫기" aria-label="검색 닫기">×</button>
       </div>
-      <div class="search-nav-actions">
-        <button type="button" class="btn btn-icon" id="btn-search-prev" title="이전 결과" aria-label="이전 검색 결과">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="18 15 12 9 6 15"></polyline>
+      <div class="search-row">
+        <div class="search-input-wrap">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
           </svg>
-        </button>
-        <button type="button" class="btn btn-icon" id="btn-search-next" title="다음 결과" aria-label="다음 검색 결과">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        </button>
-        <button type="button" class="btn btn-icon" id="btn-search-close" title="검색 닫기" aria-label="검색 닫기">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18"></line>
-            <line x1="6" y1="6" x2="18" y2="18"></line>
-          </svg>
-        </button>
+          <input type="text" id="search-input" placeholder="찾을 글자 입력..." autocomplete="off" />
+          <span class="search-count" id="search-count">0 / 0</span>
+        </div>
+        <div class="search-nav-actions">
+          <button type="button" class="btn btn-icon" id="btn-search-prev" title="이전 결과" aria-label="이전 검색 결과">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="18 15 12 9 6 15"></polyline>
+            </svg>
+          </button>
+          <button type="button" class="btn btn-icon" id="btn-search-next" title="다음 결과" aria-label="다음 검색 결과">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </button>
+        </div>
       </div>
       <div class="search-results hidden" id="search-results"></div>
     </div>
 
     <!-- 메인 영역 -->
-    <main class="main-area">
+    <main class="workspace">
       <!-- 홈 화면: 직관적인 2가지 핵심 기능 카드 -->
       <section class="welcome-screen" id="welcome-screen">
         <div class="welcome-inner">
@@ -298,11 +299,14 @@
           </div>
 
           <div class="scanner-row scanner-btn-row">
+            <button type="button" class="btn btn-primary btn-sm" id="btn-scan-preview">문서 펴기</button>
+            <button type="button" class="chip-btn is-active" data-scan-aspect="a4-portrait">A4 세로</button>
+            <button type="button" class="chip-btn" data-scan-aspect="a4-landscape">A4 가로</button>
+            <button type="button" class="chip-btn" data-scan-aspect="free">자유 비율</button>
+            <span class="spacer"></span>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-scan-rot-left">↺ 90°</button>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-scan-rot-right">↻ 90°</button>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-scan-reset">초기화</button>
-            <button type="button" class="btn btn-secondary btn-sm" id="btn-scan-preview">보정 미리보기</button>
-            <button type="button" class="btn btn-secondary btn-sm is-danger" id="btn-scan-delete">삭제</button>
           </div>
 
           <div class="scanner-row scanner-btn-row">
@@ -312,6 +316,7 @@
             <span class="spacer"></span>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-scan-add-camera">+ 촬영</button>
             <button type="button" class="btn btn-secondary btn-sm" id="btn-scan-add-gallery">+ 앨범</button>
+            <button type="button" class="btn btn-secondary btn-sm is-danger" id="btn-scan-delete">삭제</button>
           </div>
 
           <div class="scanner-pages-strip" id="scanner-pages-strip"></div>

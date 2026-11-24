@@ -51,6 +51,7 @@ const el = {
   zoomSelect: document.getElementById('zoom-select'),
 
   searchBar: document.getElementById('search-bar'),
+  searchDragHandle: document.getElementById('search-drag-handle'),
   searchInput: document.getElementById('search-input'),
   searchCount: document.getElementById('search-count'),
   btnSearchPrev: document.getElementById('btn-search-prev'),
@@ -94,6 +95,7 @@ let thumbObserver = null;
 let scrollTrackRaf = 0;
 let searchMatches = [];
 let activeSearchIdx = -1;
+let activeSearchQuery = '';
 let dragCounter = 0;
 
 // ===== 유틸리티 =====
@@ -895,6 +897,10 @@ function renderSinglePage(tab, pageIdx, card) {
     card.style.width = `${widthPx}px`;
     card.style.minHeight = `${Math.round(widthPx * nat.ratio)}px`;
     tab.renderedPages.add(pageIdx);
+
+    if (activeSearchQuery) {
+      highlightSearchOnCard(card, pageIdx);
+    }
   } catch (err) {
     const wrap = card.querySelector('.page-svg-wrap');
     if (wrap) {
@@ -1087,16 +1093,184 @@ function handleViewportScroll() {
   });
 }
 
-// ===== 글자 검색 =====
+// ===== 글자 검색 & 붉은색 음영 표시 =====
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+function clearAllSearchHighlights() {
+  el.pagesContainer.querySelectorAll('.search-highlight-layer').forEach((g) => g.remove());
+}
+
+function getCharBoxInSvg(svgEl, textEl, charIdx, svgInvCtm) {
+  try {
+    let box;
+    if (typeof textEl.getExtentOfChar === 'function') {
+      box = textEl.getExtentOfChar(charIdx);
+    } else {
+      box = textEl.getBBox();
+    }
+    if (!box || (box.width <= 0 && box.height <= 0)) return null;
+
+    const ctm = textEl.getCTM?.();
+    if (ctm && svgInvCtm) {
+      const m = svgInvCtm.multiply(ctm);
+      const pts = [
+        new DOMPoint(box.x, box.y).matrixTransform(m),
+        new DOMPoint(box.x + box.width, box.y).matrixTransform(m),
+        new DOMPoint(box.x, box.y + box.height).matrixTransform(m),
+        new DOMPoint(box.x + box.width, box.y + box.height).matrixTransform(m),
+      ];
+      const xs = pts.map((p) => p.x);
+      const ys = pts.map((p) => p.y);
+      const minX = Math.min(...xs);
+      const minY = Math.min(...ys);
+      return { x: minX, y: minY, width: Math.max(...xs) - minX, height: Math.max(...ys) - minY };
+    }
+    return { x: box.x, y: box.y, width: box.width, height: box.height };
+  } catch {
+    return null;
+  }
+}
+
+function mergeLineBoxes(boxes) {
+  if (!boxes.length) return [];
+  const merged = [];
+  for (const b of boxes) {
+    const prev = merged[merged.length - 1];
+    if (
+      prev &&
+      Math.abs(prev.y - b.y) <= Math.max(prev.height, b.height) * 0.65 &&
+      b.x >= prev.x - 4 &&
+      b.x <= prev.x + prev.width + Math.max(prev.height, b.height) * 1.4
+    ) {
+      const x1 = Math.min(prev.x, b.x);
+      const y1 = Math.min(prev.y, b.y);
+      const x2 = Math.max(prev.x + prev.width, b.x + b.width);
+      const y2 = Math.max(prev.y + prev.height, b.y + b.height);
+      prev.x = x1;
+      prev.y = y1;
+      prev.width = x2 - x1;
+      prev.height = y2 - y1;
+    } else {
+      merged.push({ ...b });
+    }
+  }
+  return merged;
+}
+
+function highlightSearchOnCard(card, pageIdx, activeOccIdx = -1) {
+  const svgEl = card?.querySelector('.page-svg-wrap svg');
+  if (!svgEl) return null;
+
+  svgEl.querySelectorAll('.search-highlight-layer').forEach((g) => g.remove());
+
+  const normQuery = activeSearchQuery.replace(/\s+/g, '').toLowerCase();
+  if (!normQuery) return null;
+
+  const textEls = svgEl.querySelectorAll('text');
+  if (!textEls.length) return null;
+
+  const normChars = [];
+  const normMap = [];
+  for (const tEl of textEls) {
+    const str = tEl.textContent || '';
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (!/\s/.test(ch)) {
+        normChars.push(ch.toLowerCase());
+        normMap.push({ el: tEl, charIdx: i });
+      }
+    }
+  }
+
+  const fullNorm = normChars.join('');
+  let svgInvCtm = null;
+  try {
+    const rootCtm = svgEl.getCTM?.();
+    if (rootCtm) svgInvCtm = rootCtm.inverse();
+  } catch {
+    svgInvCtm = null;
+  }
+
+  const layer = document.createElementNS(SVG_NS, 'g');
+  layer.setAttribute('class', 'search-highlight-layer');
+
+  let pos = 0;
+  let occIdx = 0;
+  let activeRectEl = null;
+
+  while (pos < fullNorm.length) {
+    const idx = fullNorm.indexOf(normQuery, pos);
+    if (idx === -1) break;
+
+    const boxes = [];
+    for (let k = idx; k < idx + normQuery.length; k++) {
+      const ref = normMap[k];
+      const box = getCharBoxInSvg(svgEl, ref.el, ref.charIdx, svgInvCtm);
+      if (box) boxes.push(box);
+    }
+
+    const lineBoxes = mergeLineBoxes(boxes);
+    const isActive = occIdx === activeOccIdx;
+
+    for (const lb of lineBoxes) {
+      const pad = 1.5;
+      const rect = document.createElementNS(SVG_NS, 'rect');
+      rect.setAttribute('x', String(lb.x - pad));
+      rect.setAttribute('y', String(lb.y - pad));
+      rect.setAttribute('width', String(lb.width + pad * 2));
+      rect.setAttribute('height', String(lb.height + pad * 2));
+      rect.setAttribute('rx', '2');
+      rect.setAttribute('class', isActive ? 'search-hl-rect is-active' : 'search-hl-rect');
+      layer.appendChild(rect);
+      if (isActive && !activeRectEl) activeRectEl = rect;
+    }
+
+    occIdx += 1;
+    pos = idx + Math.max(1, normQuery.length);
+  }
+
+  if (layer.childNodes.length > 0) {
+    svgEl.appendChild(layer);
+  }
+  return activeRectEl;
+}
+
+function getActiveOccurrenceOnPage(targetIdx) {
+  const m = searchMatches[targetIdx];
+  if (!m) return -1;
+  let occ = 0;
+  for (let i = 0; i < targetIdx; i++) {
+    if (searchMatches[i].page === m.page) occ += 1;
+  }
+  return occ;
+}
+
+function refreshAllSearchHighlights() {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const activeMatch = activeSearchIdx >= 0 ? searchMatches[activeSearchIdx] : null;
+  const activePageIdx = activeMatch ? activeMatch.page - 1 : -1;
+  const activeOcc = activeMatch ? getActiveOccurrenceOnPage(activeSearchIdx) : -1;
+
+  for (const idx of tab.renderedPages) {
+    const card = el.pagesContainer.children[idx];
+    if (card) {
+      highlightSearchOnCard(card, idx, idx === activePageIdx ? activeOcc : -1);
+    }
+  }
+}
+
 function runSearch(query) {
   const tab = getActiveTab();
   if (!tab) return;
 
   const q = query.trim();
+  activeSearchQuery = q;
   searchMatches = [];
   activeSearchIdx = -1;
 
   if (!q) {
+    clearAllSearchHighlights();
     el.searchCount.textContent = '0 / 0';
     el.searchResults.classList.add('hidden');
     el.searchResults.innerHTML = '';
@@ -1153,6 +1327,7 @@ function runSearch(query) {
   }
 
   if (searchMatches.length === 0) {
+    clearAllSearchHighlights();
     el.searchCount.textContent = '0 / 0';
     el.searchResults.innerHTML = '<div class="empty-state" style="padding:14px;">일치하는 검색 결과가 없습니다.</div>';
     el.searchResults.classList.remove('hidden');
@@ -1194,7 +1369,88 @@ function selectSearchMatch(idx) {
     items[activeSearchIdx].scrollIntoView({ block: 'nearest' });
   }
 
-  jumpToPage(searchMatches[activeSearchIdx].page, true);
+  const tab = getActiveTab();
+  const targetPage = searchMatches[activeSearchIdx].page;
+  const card = el.pagesContainer.children[targetPage - 1];
+  if (tab && card) {
+    renderSinglePage(tab, targetPage - 1, card);
+    refreshAllSearchHighlights();
+    const activeRect = highlightSearchOnCard(card, targetPage - 1, getActiveOccurrenceOnPage(activeSearchIdx));
+    setCurrentPageUI(tab, targetPage);
+    if (activeRect) {
+      activeRect.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    } else {
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  } else {
+    jumpToPage(targetPage, true);
+  }
+}
+
+function bindDraggableSearchPopup() {
+  const handle = el.searchDragHandle;
+  const popup = el.searchBar;
+  if (!handle || !popup) return;
+
+  let drag = null;
+
+  const startDrag = (clientX, clientY) => {
+    const rect = popup.getBoundingClientRect();
+    popup.style.left = `${rect.left}px`;
+    popup.style.top = `${rect.top}px`;
+    popup.style.right = 'auto';
+    drag = {
+      offsetX: clientX - rect.left,
+      offsetY: clientY - rect.top,
+      w: rect.width,
+      h: rect.height,
+    };
+  };
+
+  const moveDrag = (clientX, clientY) => {
+    if (!drag) return;
+    const maxX = Math.max(6, window.innerWidth - drag.w - 6);
+    const maxY = Math.max(6, window.innerHeight - Math.min(drag.h, 80) - 6);
+    const x = Math.min(maxX, Math.max(6, clientX - drag.offsetX));
+    const y = Math.min(maxY, Math.max(6, clientY - drag.offsetY));
+    popup.style.left = `${x}px`;
+    popup.style.top = `${y}px`;
+  };
+
+  const endDrag = () => {
+    drag = null;
+  };
+
+  handle.addEventListener('mousedown', (e) => {
+    if (e.target.closest('button')) return;
+    e.preventDefault();
+    startDrag(e.clientX, e.clientY);
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (drag) moveDrag(e.clientX, e.clientY);
+  });
+  window.addEventListener('mouseup', endDrag);
+
+  handle.addEventListener(
+    'touchstart',
+    (e) => {
+      if (e.target.closest('button') || e.touches.length !== 1) return;
+      e.preventDefault();
+      startDrag(e.touches[0].clientX, e.touches[0].clientY);
+    },
+    { passive: false }
+  );
+  window.addEventListener(
+    'touchmove',
+    (e) => {
+      if (!drag || e.touches.length !== 1) return;
+      e.preventDefault();
+      moveDrag(e.touches[0].clientX, e.touches[0].clientY);
+    },
+    { passive: false }
+  );
+  window.addEventListener('touchend', endDrag);
+  window.addEventListener('touchcancel', endDrag);
 }
 
 // ===== 파일 다운로드 & 오프라인 PDF 저장 =====
@@ -1389,17 +1645,26 @@ function bindEvents() {
   });
 
   // 글자 검색
+  const closeSearch = () => {
+    el.searchBar.classList.add('hidden');
+    activeSearchQuery = '';
+    clearAllSearchHighlights();
+  };
   const openSearch = () => {
     if (!getActiveTab()) return;
     el.searchBar.classList.remove('hidden');
     el.searchInput.focus();
     el.searchInput.select();
+    if (el.searchInput.value.trim()) {
+      runSearch(el.searchInput.value);
+    }
   };
   el.btnSearchToggle.addEventListener('click', () => {
     if (el.searchBar.classList.contains('hidden')) openSearch();
-    else el.searchBar.classList.add('hidden');
+    else closeSearch();
   });
-  el.btnSearchClose.addEventListener('click', () => el.searchBar.classList.add('hidden'));
+  el.btnSearchClose.addEventListener('click', closeSearch);
+  bindDraggableSearchPopup();
   el.searchInput.addEventListener('input', () => runSearch(el.searchInput.value));
   el.searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {

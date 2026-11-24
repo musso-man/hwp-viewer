@@ -102,23 +102,51 @@ function applyScanFilter(imageData, filter) {
   }
 }
 
+/**
+ * 4개의 꼭짓점을 항상 [좌상(TL), 우상(TR), 우하(BR), 좌하(BL)] 순서로 정렬하여
+ * 사용자가 모서리를 교차 드래그해도 원근 변환이 꼬이지 않게 한다.
+ */
+function orderQuadCorners(pts) {
+  const bySum = [...pts].sort((a, b) => a.x + a.y - (b.x + b.y));
+  const tl = bySum[0];
+  const br = bySum[3];
+  const rest = [bySum[1], bySum[2]];
+  // 우상(TR)은 x - y가 더 크고, 좌하(BL)는 x - y가 더 작다
+  rest.sort((a, b) => b.x - b.y - (a.x - a.y));
+  const tr = rest[0];
+  const bl = rest[1];
+  return [tl, tr, br, bl];
+}
+
 function renderWarpedPageCanvas(page, maxOutDim = 1600) {
   const srcCanvas = getRotatedSourceCanvas(page.img, page.rot90, page.tilt);
   const sw = srcCanvas.width;
   const sh = srcCanvas.height;
 
-  const pts = page.corners.map((c) => ({ x: c.x * sw, y: c.y * sh }));
+  const pts = orderQuadCorners(page.corners.map((c) => ({ x: c.x * sw, y: c.y * sh })));
   const topW = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y);
   const botW = Math.hypot(pts[2].x - pts[3].x, pts[2].y - pts[3].y);
   const leftH = Math.hypot(pts[3].x - pts[0].x, pts[3].y - pts[0].y);
   const rightH = Math.hypot(pts[2].x - pts[1].x, pts[2].y - pts[1].y);
 
-  let dstW = Math.max(200, Math.round(Math.max(topW, botW)));
-  let dstH = Math.max(200, Math.round(Math.max(leftH, rightH)));
+  let dstW;
+  let dstH;
+  const A4_RATIO = Math.SQRT2; // 1.4142 (297 / 210)
+  const aspect = page.aspect || 'a4-portrait';
 
-  const scaleDown = Math.min(1, maxOutDim / Math.max(dstW, dstH));
-  dstW = Math.max(200, Math.round(dstW * scaleDown));
-  dstH = Math.max(200, Math.round(dstH * scaleDown));
+  if (aspect === 'a4-portrait') {
+    dstH = Math.round(maxOutDim);
+    dstW = Math.round(maxOutDim / A4_RATIO);
+  } else if (aspect === 'a4-landscape') {
+    dstW = Math.round(maxOutDim);
+    dstH = Math.round(maxOutDim / A4_RATIO);
+  } else {
+    dstW = Math.max(200, Math.round(Math.max(topW, botW)));
+    dstH = Math.max(200, Math.round(Math.max(leftH, rightH)));
+    const scaleDown = Math.min(1, maxOutDim / Math.max(dstW, dstH));
+    dstW = Math.max(200, Math.round(dstW * scaleDown));
+    dstH = Math.max(200, Math.round(dstH * scaleDown));
+  }
 
   const H = computeInverseHomography(dstW, dstH, pts);
   const outCanvas = document.createElement('canvas');
@@ -231,6 +259,7 @@ export function initDocumentScanner({ onSavePdf, showToast }) {
   const tiltRange = document.getElementById('scan-tilt-range');
   const tiltValue = document.getElementById('scan-tilt-value');
   const filterBtns = document.querySelectorAll('[data-scan-filter]');
+  const aspectBtns = document.querySelectorAll('[data-scan-aspect]');
   const pagesStrip = document.getElementById('scanner-pages-strip');
   const pageBadge = document.getElementById('scanner-page-badge');
 
@@ -265,9 +294,12 @@ export function initDocumentScanner({ onSavePdf, showToast }) {
     filterBtns.forEach((b) => {
       b.classList.toggle('is-active', b.dataset.scanFilter === page.filter);
     });
+    aspectBtns.forEach((b) => {
+      b.classList.toggle('is-active', b.dataset.scanAspect === (page.aspect || 'a4-portrait'));
+    });
 
     btnPreviewToggle.classList.toggle('is-active', previewMode);
-    btnPreviewToggle.textContent = previewMode ? '모서리 조절' : '보정 미리보기';
+    btnPreviewToggle.textContent = previewMode ? '모서리 조절' : '문서 펴기';
 
     renderPagesStrip();
     redrawCanvas();
@@ -366,6 +398,51 @@ export function initDocumentScanner({ onSavePdf, showToast }) {
       ctx.strokeStyle = '#ffffff';
       ctx.stroke();
     }
+
+    // 드래그 중 정밀 조준용 2배 확대 돋보기(루페)
+    if (draggingCorner !== -1) {
+      const p = pts[draggingCorner];
+      const r = 42;
+      const loupeX = Math.min(dw - r - 8, Math.max(r + 8, p.x));
+      const loupeY = p.y - r - 36 > 8 ? p.y - r - 36 : Math.min(dh - r - 8, p.y + r + 36);
+      const srcX = page.corners[draggingCorner].x * src.width;
+      const srcY = page.corners[draggingCorner].y * src.height;
+      const cropHalf = r / (scale * 2);
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(loupeX, loupeY, r, 0, Math.PI * 2);
+      ctx.clip();
+      ctx.fillStyle = '#0f172a';
+      ctx.fillRect(loupeX - r, loupeY - r, r * 2, r * 2);
+      ctx.drawImage(
+        src,
+        srcX - cropHalf,
+        srcY - cropHalf,
+        cropHalf * 2,
+        cropHalf * 2,
+        loupeX - r,
+        loupeY - r,
+        r * 2,
+        r * 2
+      );
+      // 십자선
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(loupeX - 10, loupeY);
+      ctx.lineTo(loupeX + 10, loupeY);
+      ctx.moveTo(loupeX, loupeY - 10);
+      ctx.lineTo(loupeX, loupeY + 10);
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.beginPath();
+      ctx.arc(loupeX, loupeY, r, 0, Math.PI * 2);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
@@ -449,6 +526,7 @@ export function initDocumentScanner({ onSavePdf, showToast }) {
           rot90: 0,
           tilt: 0,
           filter: 'enhance',
+          aspect: img.naturalWidth > img.naturalHeight ? 'a4-landscape' : 'a4-portrait',
           corners: defaultCorners(),
         });
         activeIdx = pages.length - 1;
@@ -518,6 +596,16 @@ export function initDocumentScanner({ onSavePdf, showToast }) {
     if (!getActivePage()) return;
     previewMode = !previewMode;
     updateUIState();
+  });
+
+  aspectBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const page = getActivePage();
+      if (!page) return;
+      page.aspect = btn.dataset.scanAspect;
+      previewMode = true;
+      updateUIState();
+    });
   });
 
   filterBtns.forEach((btn) => {

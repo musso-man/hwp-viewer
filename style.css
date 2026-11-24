@@ -462,29 +462,73 @@ body {
   border-color: var(--accent);
 }
 
-/* ===== Floating Search Bar ===== */
+/* ===== Draggable Floating Search Popup ===== */
 .search-bar {
   position: fixed;
-  top: calc(var(--header-h) + 52px);
-  right: 22px;
-  width: min(360px, calc(100vw - 32px));
+  top: calc(var(--header-h) + 56px);
+  right: 16px;
+  width: min(350px, calc(100vw - 24px));
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--card-shadow);
-  z-index: 40;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+  z-index: 60;
   overflow: hidden;
 }
 
-.search-input-row {
+.search-drag-handle {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 8px 10px;
+  padding: 6px 8px 6px 12px;
+  background: var(--bg-surface-alt);
+  border-bottom: 1px solid var(--border);
+  cursor: move;
+  user-select: none;
+  touch-action: none;
+}
+
+.search-drag-grip {
+  font-size: 13px;
+  letter-spacing: -1px;
   color: var(--text-muted);
 }
 
-.search-input-row input {
+.search-drag-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+}
+
+.btn-xs {
+  width: 24px;
+  height: 24px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+}
+
+.search-input-wrap {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-surface-alt);
+  color: var(--text-muted);
+}
+
+.search-input-wrap input {
   flex: 1;
   min-width: 0;
   border: none;
@@ -494,8 +538,14 @@ body {
   font-size: 13px;
 }
 
-.search-input-row input:focus {
+.search-input-wrap input:focus {
   outline: none;
+}
+
+.search-nav-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 
 .search-count {
@@ -505,7 +555,7 @@ body {
 }
 
 .search-results {
-  max-height: 240px;
+  max-height: 180px;
   overflow-y: auto;
   border-top: 1px solid var(--border);
   background: var(--bg-surface-alt);
@@ -538,7 +588,7 @@ body {
 .search-result-page {
   font-size: 11px;
   font-weight: 700;
-  color: var(--accent);
+  color: #dc2626;
 }
 
 .search-result-snippet {
@@ -550,10 +600,30 @@ body {
 }
 
 .search-result-snippet mark {
-  background: rgba(250, 204, 21, 0.45);
-  color: inherit;
+  background: rgba(239, 68, 68, 0.28);
+  color: #b91c1c;
+  font-weight: 700;
   padding: 0 2px;
   border-radius: 2px;
+}
+
+[data-theme='dark'] .search-result-snippet mark {
+  background: rgba(239, 68, 68, 0.38);
+  color: #fecaca;
+}
+
+/* SVG 검색어 붉은색 음영 표시 */
+.search-hl-rect {
+  fill: rgba(239, 68, 68, 0.28);
+  stroke: rgba(220, 38, 38, 0.55);
+  stroke-width: 0.7;
+  pointer-events: none;
+}
+
+.search-hl-rect.is-active {
+  fill: rgba(239, 68, 68, 0.48);
+  stroke: #dc2626;
+  stroke-width: 1.4;
 }
 
 /* ===== Main Workspace ===== */
@@ -563,6 +633,14 @@ body {
   display: flex;
   flex-direction: column;
   position: relative;
+  overflow: hidden;
+}
+
+@media (pointer: coarse) {
+  .page-svg-wrap {
+    user-select: none;
+    -webkit-user-select: none;
+  }
 }
 
 /* ===== Welcome Screen ===== */
