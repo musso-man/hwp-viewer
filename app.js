@@ -1,3 +1,6 @@
+import { buildPdfFromJpegs, svgStringToJpegPage } from './pdf-utils.js';
+import { initDocumentScanner } from './scanner.js';
+
 const CDN_BASES = [
   'https://cdn.jsdelivr.net/npm/@rhwp/core@0.9.1',
   'https://unpkg.com/@rhwp/core@0.9.1',
@@ -5,7 +8,9 @@ const CDN_BASES = [
 
 const DEFAULT_PAGE_RATIO = 842 / 595; // A4 세로 비율
 const BASE_A4_WIDTH_PX = 794; // 96dpi 기준 A4 폭
-const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const ZOOM_STEPS = [0.25, 0.35, 0.5, 0.75, 1, 1.25, 1.5, 2];
+const MIN_ZOOM = 0.15;
+const MAX_ZOOM = 4;
 
 // @rhwp/core WASM 초기화 전에 반드시 등록해야 하는 텍스트 폭 측정 콜백
 let measureCtx = null;
@@ -27,10 +32,9 @@ const el = {
   engineStatus: document.getElementById('engine-status'),
   engineStatusText: document.getElementById('engine-status-text'),
   btnOpenFile: document.getElementById('btn-open-file'),
-  btnOpenUrl: document.getElementById('btn-open-url'),
+  btnOpenScanner: document.getElementById('btn-open-scanner'),
   btnSearchToggle: document.getElementById('btn-search-toggle'),
-  btnExtractText: document.getElementById('btn-extract-text'),
-  btnPrint: document.getElementById('btn-print'),
+  btnSavePdf: document.getElementById('btn-save-pdf'),
   btnTheme: document.getElementById('btn-theme'),
   fileInput: document.getElementById('file-input'),
 
@@ -41,11 +45,10 @@ const el = {
   btnNextPage: document.getElementById('btn-next-page'),
   pageInput: document.getElementById('page-input'),
   pageTotal: document.getElementById('page-total'),
+  colBadge: document.getElementById('col-badge'),
   btnZoomOut: document.getElementById('btn-zoom-out'),
   btnZoomIn: document.getElementById('btn-zoom-in'),
   zoomSelect: document.getElementById('zoom-select'),
-  btnSaveHwpx: document.getElementById('btn-save-hwpx'),
-  btnSaveTxt: document.getElementById('btn-save-txt'),
 
   searchBar: document.getElementById('search-bar'),
   searchInput: document.getElementById('search-input'),
@@ -57,38 +60,21 @@ const el = {
 
   welcomeScreen: document.getElementById('welcome-screen'),
   welcomeDropzone: document.getElementById('welcome-dropzone'),
-  btnWelcomeFile: document.getElementById('btn-welcome-file'),
-  btnWelcomeUrl: document.getElementById('btn-welcome-url'),
-  btnSampleHwpx: document.getElementById('btn-sample-hwpx'),
-  btnSampleHwp: document.getElementById('btn-sample-hwp'),
+  btnWelcomeScanner: document.getElementById('btn-welcome-scanner'),
 
   readerLayout: document.getElementById('reader-layout'),
   sidebar: document.getElementById('sidebar'),
   sidebarBody: document.querySelector('.sidebar-body'),
-  sidebarTabs: document.querySelectorAll('.sidebar-tab'),
   paneThumbs: document.getElementById('pane-thumbs'),
-  paneOutline: document.getElementById('pane-outline'),
-  paneInfo: document.getElementById('pane-info'),
   viewport: document.getElementById('viewport'),
   pagesContainer: document.getElementById('pages-container'),
 
   dropOverlay: document.getElementById('drop-overlay'),
-  urlModal: document.getElementById('url-modal'),
-  urlForm: document.getElementById('url-form'),
-  urlInput: document.getElementById('url-input'),
-  urlError: document.getElementById('url-error'),
-  btnUrlSubmit: document.getElementById('btn-url-submit'),
-
   passwordModal: document.getElementById('password-modal'),
   passwordForm: document.getElementById('password-form'),
   passwordFilename: document.getElementById('password-filename'),
   passwordInput: document.getElementById('password-input'),
   passwordError: document.getElementById('password-error'),
-
-  textModal: document.getElementById('text-modal'),
-  extractedTextarea: document.getElementById('extracted-textarea'),
-  btnDownloadTxt: document.getElementById('btn-download-txt'),
-  btnCopyText: document.getElementById('btn-copy-text'),
 
   toastContainer: document.getElementById('toast-container'),
 };
@@ -100,6 +86,8 @@ let tabs = [];
 let activeTabId = null;
 let nextTabSeq = 1;
 let pendingEncrypted = null;
+let scannerController = null;
+let exportingPdf = false;
 
 let pageObserver = null;
 let thumbObserver = null;
@@ -109,7 +97,7 @@ let activeSearchIdx = -1;
 let dragCounter = 0;
 
 // ===== 유틸리티 =====
-function showToast(message, type = 'info', duration = 3800) {
+function showToast(message, type = 'info', duration = 3600) {
   const node = document.createElement('div');
   node.className = `toast is-${type}`;
   node.textContent = message;
@@ -140,24 +128,15 @@ function safeJsonParse(str) {
   }
 }
 
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes) || bytes < 0) return '-';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-}
-
 function stripExt(name) {
   return name.replace(/\.(hwpx|hwp|hml)$/i, '');
 }
 
 function detectFormatFromMagic(bytes, fileName = '') {
   if (bytes.length >= 4) {
-    // ZIP (HWPX)
     if (bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04) {
       return 'hwpx';
     }
-    // OLE2 Compound File (HWP 5.0)
     if (bytes[0] === 0xd0 && bytes[1] === 0xcf && bytes[2] === 0x11 && bytes[3] === 0xe0) {
       return 'hwp';
     }
@@ -179,26 +158,6 @@ function isSupportedFile(file, bytes) {
   return false;
 }
 
-function normalizeFileUrl(raw) {
-  let trimmed = raw.trim();
-  // GitHub blob URL -> raw.githubusercontent.com 자동 변환
-  const ghBlob = trimmed.match(/^https?:\/\/github\.com\/([^/]+)\/([^/]+)\/blob\/(.+)$/i);
-  if (ghBlob) {
-    trimmed = `https://raw.githubusercontent.com/${ghBlob[1]}/${ghBlob[2]}/${ghBlob[3]}`;
-  }
-  return trimmed;
-}
-
-function fileNameFromUrl(url) {
-  try {
-    const u = new URL(url);
-    const seg = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || 'document.hwpx');
-    return seg;
-  } catch {
-    return 'document.hwpx';
-  }
-}
-
 function getActiveTab() {
   return tabs.find((t) => t.id === activeTabId) || null;
 }
@@ -213,6 +172,15 @@ function isEditableFocused() {
 function setEngineStatus(state, text) {
   el.engineStatus.className = `engine-status is-${state}`;
   el.engineStatusText.textContent = text;
+  if (state === 'ready') {
+    setTimeout(() => {
+      if (el.engineStatus.classList.contains('is-ready')) {
+        el.engineStatus.classList.add('hidden');
+      }
+    }, 1400);
+  } else {
+    el.engineStatus.classList.remove('hidden');
+  }
 }
 
 // ===== WASM 엔진 로드 =====
@@ -240,10 +208,7 @@ async function fetchWasmWithProgress(url) {
     received += value.byteLength;
     if (total > 0) {
       const pct = Math.min(99, Math.round((received / total) * 100));
-      setEngineStatus('loading', `엔진 불러오는 중... ${pct}%`);
-    } else {
-      const mb = (received / (1024 * 1024)).toFixed(1);
-      setEngineStatus('loading', `엔진 불러오는 중... ${mb}MB`);
+      setEngineStatus('loading', `엔진 준비 중... ${pct}%`);
     }
   }
 
@@ -282,11 +247,8 @@ function ensureEngineReady() {
     let lastErr = null;
     for (let i = 0; i < bases.length; i++) {
       try {
-        if (i > 0) {
-          setEngineStatus('loading', '보조 서버에서 불러오는 중...');
-        }
         HwpDocumentClass = await loadEngineFromBase(bases[i]);
-        setEngineStatus('ready', '엔진 준비 완료');
+        setEngineStatus('ready', '준비 완료');
         return HwpDocumentClass;
       } catch (err) {
         lastErr = err;
@@ -341,16 +303,13 @@ function closeModal(id) {
     el.passwordInput.value = '';
     el.passwordError.classList.add('hidden');
   }
-  if (id === 'url-modal') {
-    el.urlError.classList.add('hidden');
-  }
 }
 
 function closeAllModals() {
-  ['url-modal', 'password-modal', 'text-modal'].forEach(closeModal);
+  ['password-modal', 'scanner-modal'].forEach(closeModal);
 }
 
-// ===== 문서 파싱 헬퍼 (방어적 JSON 처리) =====
+// ===== 문서 파싱 & SVG ID 격리 =====
 function getDocPageDimensions(doc, pageIdx) {
   try {
     const raw = doc.getPageInfo(pageIdx);
@@ -374,7 +333,6 @@ function parseSvgNaturalSize(svgString) {
     const vbW = parseFloat(vbMatch[1]);
     const vbH = parseFloat(vbMatch[2]);
     if (vbW > 0 && vbH > 0) {
-      // A4(약 595pt / 210mm)를 100% 줌에서 읽기 편한 794px 기준으로 정규화
       const ratio = vbH / vbW;
       return { baseWidth: BASE_A4_WIDTH_PX, baseHeight: Math.round(BASE_A4_WIDTH_PX * ratio), ratio };
     }
@@ -459,8 +417,7 @@ function getAllPageTexts(tab) {
 }
 
 function formatDetectionError(err) {
-  const msg = String(err?.message || err || '알 수 없는 오류');
-  return msg;
+  return String(err?.message || err || '알 수 없는 오류');
 }
 
 function isPasswordError(errMsg) {
@@ -477,10 +434,10 @@ async function openFileObjects(fileList) {
       const buf = await file.arrayBuffer();
       const bytes = new Uint8Array(buf);
       if (!isSupportedFile(file, bytes)) {
-        showToast(`지원하지 않는 파일 형식입니다: ${file.name || '(이름 없음)'}`, 'error');
+        showToast(`지원하지 않는 파일입니다: ${file.name || '(이름 없음)'}`, 'error');
         continue;
       }
-      const name = file.name || `붙여넣은_문서.${detectFormatFromMagic(bytes) || 'hwpx'}`;
+      const name = file.name || `문서.${detectFormatFromMagic(bytes) || 'hwpx'}`;
       await openBytes(name, bytes);
     } catch (err) {
       showToast(`파일을 읽지 못했습니다: ${formatDetectionError(err)}`, 'error');
@@ -491,10 +448,10 @@ async function openFileObjects(fileList) {
 async function openBytes(name, bytes) {
   let HwpDocument;
   try {
-    showToast(`${name} 불러오는 중...`, 'info', 1800);
+    showToast(`${name} 여는 중...`, 'info', 1600);
     HwpDocument = await ensureEngineReady();
   } catch (err) {
-    showToast(`뷰어 엔진을 불러오지 못했습니다: ${formatDetectionError(err)}`, 'error', 5000);
+    showToast(`엔진을 불러오지 못했습니다: ${formatDetectionError(err)}`, 'error', 5000);
     return;
   }
 
@@ -547,7 +504,7 @@ function registerOpenedDocument(name, bytes, doc) {
     const srcFmt = doc.getSourceFormat();
     if (srcFmt) format = srcFmt.toLowerCase();
   } catch {
-    // fallback to detected magic/ext
+    // fallback
   }
 
   let pageCount = 1;
@@ -567,7 +524,7 @@ function registerOpenedDocument(name, bytes, doc) {
     pageCount,
     currentPage: 1,
     zoom: 1,
-    zoomMode: window.innerWidth <= 900 ? 'fit-width' : 'manual', // 'manual' | 'fit-width' | 'fit-page'
+    zoomMode: window.innerWidth <= 900 ? 'fit-width' : 'manual',
     renderedPages: new Set(),
     renderedThumbs: new Set(),
     pageDims: new Map(),
@@ -577,124 +534,7 @@ function registerOpenedDocument(name, bytes, doc) {
 
   tabs.push(tab);
   activateTab(tab.id);
-  showToast(`${name} (${pageCount}페이지) 열기 완료`, 'success', 2600);
-}
-
-async function openFromUrl(rawUrl) {
-  const normalized = normalizeFileUrl(rawUrl);
-  if (!/^https?:\/\//i.test(normalized)) {
-    throw new Error('올바른 http:// 또는 https:// 주소를 입력해 주세요.');
-  }
-
-  const fileName = fileNameFromUrl(normalized);
-  showToast(`URL에서 파일 가져오는 중: ${fileName}`, 'info', 2400);
-
-  let res;
-  try {
-    res = await fetch(normalized, { mode: 'cors' });
-  } catch {
-    throw new Error('네트워크 오류 또는 대상 서버의 CORS 제한으로 브라우저에서 직접 가져올 수 없습니다. 파일을 다운로드한 뒤 붙여넣거나 끌어다 놓아 주세요.');
-  }
-
-  if (!res.ok) {
-    throw new Error(`파일 요청 실패 (HTTP ${res.status})`);
-  }
-
-  const buf = await res.arrayBuffer();
-  const bytes = new Uint8Array(buf);
-  const detected = detectFormatFromMagic(bytes, fileName);
-  if (!detected) {
-    throw new Error('가져온 데이터가 올바른 한글 문서(.hwpx, .hwp, .hml)가 아닙니다.');
-  }
-
-  await openBytes(fileName, bytes);
-}
-
-// ===== 샘플 문서 생성 (blank2010 템플릿 기반 실제 파일 생성 -> 재파싱) =====
-async function openSampleDocument(format) {
-  let HwpDocument;
-  try {
-    HwpDocument = await ensureEngineReady();
-  } catch (err) {
-    showToast(`엔진이 준비되지 않았습니다: ${formatDetectionError(err)}`, 'error');
-    return;
-  }
-
-  const builder = HwpDocument.createEmpty();
-  try {
-    builder.createBlankDocument();
-
-    const title = `한글 뷰어 샘플 문서 (${format.toUpperCase()})`;
-    builder.insertText(0, 0, 0, title);
-    try {
-      builder.applyCharFormat(0, 0, 0, title.length, JSON.stringify({ bold: true, fontSize: 1800 }));
-      builder.applyParaFormat(0, 0, JSON.stringify({ align: 'center' }));
-    } catch {
-      // 서식 적용 실패 시 기본 텍스트 유지
-    }
-
-    const lines = [
-      '',
-      '이 문서는 브라우저 내 WebAssembly 엔진(@rhwp/core)으로 직접 생성·파싱된 실제 한글 문서입니다.',
-      '파일 탐색기나 Finder에서 .hwpx 또는 .hwp 파일을 복사(Ctrl+C)한 뒤 이 화면에서 Ctrl+V를 누르거나 끌어다 놓으면 즉시 문서를 읽을 수 있습니다.',
-      'GitHub 저장소의 파일 링크(blob URL)를 붙여넣어도 자동으로 원본(raw) 파일을 불러와 안전하게 로컬에서 렌더링합니다.',
-      '아래 표는 문서 내 표·셀 렌더링과 본문 검색(Ctrl+F) 기능을 확인하기 위한 예시입니다.',
-    ];
-
-    let paraIdx = 0;
-    let currentLen = title.length;
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      const splitRes = safeJsonParse(builder.splitParagraph(0, paraIdx, currentLen));
-      paraIdx = Number.isInteger(splitRes?.paraIdx) ? splitRes.paraIdx : paraIdx + 1;
-      currentLen = 0;
-
-      if (i === 0) {
-        try {
-          builder.applyParaFormat(0, paraIdx, JSON.stringify({ align: 'left' }));
-        } catch {
-          // 무시
-        }
-      }
-
-      if (line) {
-        builder.insertText(0, paraIdx, 0, line);
-        currentLen = line.length;
-      }
-    }
-
-    const tableSplit = safeJsonParse(builder.splitParagraph(0, paraIdx, currentLen));
-    paraIdx = Number.isInteger(tableSplit?.paraIdx) ? tableSplit.paraIdx : paraIdx + 1;
-    const tblRes = safeJsonParse(builder.createTable(0, paraIdx, 0, 3, 3));
-    const tblPara = tblRes && Number.isInteger(tblRes.paraIdx) ? tblRes.paraIdx : paraIdx;
-    const tblCtrl = tblRes && Number.isInteger(tblRes.controlIdx) ? tblRes.controlIdx : 0;
-
-    const cells = [
-      '지원 기능', '입력 방법', '비고',
-      'HWPX / HWP 5.0', 'Ctrl+V 붙여넣기 / 드롭', '100% 브라우저 처리',
-      '검색 · 추출 · 인쇄', 'Ctrl+F / PDF 저장', '암호 문서 열기 지원',
-    ];
-
-    cells.forEach((txt, idx) => {
-      try {
-        builder.insertTextInCell(0, tblPara, tblCtrl, idx, 0, 0, txt);
-      } catch {
-        // 무시
-      }
-    });
-
-    const bytes = format === 'hwp' ? builder.exportHwp() : builder.exportHwpx();
-    const sampleName = format === 'hwp' ? '샘플_안내문서.hwp' : '샘플_안내문서.hwpx';
-    await openBytes(sampleName, new Uint8Array(bytes));
-  } catch (err) {
-    showToast(`샘플 문서 생성 실패: ${formatDetectionError(err)}`, 'error');
-  } finally {
-    try {
-      builder.free();
-    } catch {
-      // ignore
-    }
-  }
+  showToast(`${name} (${pageCount}페이지)`, 'success', 2200);
 }
 
 // ===== 탭 & 뷰포트 렌더링 =====
@@ -741,9 +581,8 @@ function updateDocControlsState() {
   const tab = getActiveTab();
   const hasDoc = Boolean(tab);
 
-  el.btnSearchToggle.disabled = !hasDoc;
-  el.btnExtractText.disabled = !hasDoc;
-  el.btnPrint.disabled = !hasDoc;
+  el.btnSearchToggle.classList.toggle('hidden', !hasDoc);
+  el.btnSavePdf.classList.toggle('hidden', !hasDoc);
 
   el.welcomeScreen.classList.toggle('hidden', hasDoc);
   el.readerLayout.classList.toggle('hidden', !hasDoc);
@@ -821,15 +660,11 @@ function activateTab(tabId) {
     disconnectObservers();
     el.pagesContainer.innerHTML = '';
     el.paneThumbs.innerHTML = '';
-    el.paneOutline.innerHTML = '';
-    el.paneInfo.innerHTML = '';
     return;
   }
 
   buildDocumentPages(tab);
   buildSidebarThumbs(tab);
-  buildSidebarOutline(tab);
-  buildSidebarInfo(tab);
 
   if (tab.zoomMode !== 'manual') {
     applyZoomMode(tab, tab.zoomMode);
@@ -856,13 +691,14 @@ function closeTab(tabId) {
 }
 
 function computeZoomFactor(tab) {
+  const padX = window.innerWidth <= 600 ? 20 : 40;
   if (tab.zoomMode === 'fit-width') {
-    const availW = Math.max(280, el.viewport.clientWidth - 48);
+    const availW = Math.max(240, el.viewport.clientWidth - padX);
     return availW / BASE_A4_WIDTH_PX;
   }
   if (tab.zoomMode === 'fit-page') {
-    const availW = Math.max(280, el.viewport.clientWidth - 48);
-    const availH = Math.max(320, el.viewport.clientHeight - 48);
+    const availW = Math.max(240, el.viewport.clientWidth - padX);
+    const availH = Math.max(280, el.viewport.clientHeight - 40);
     const dim = tab.pageDims.get(tab.currentPage - 1) || { baseWidth: BASE_A4_WIDTH_PX, ratio: DEFAULT_PAGE_RATIO };
     const wRatio = availW / dim.baseWidth;
     const hRatio = availH / (dim.baseWidth * dim.ratio);
@@ -874,20 +710,38 @@ function computeZoomFactor(tab) {
 function applyPageCardDimensions(tab) {
   const factor = computeZoomFactor(tab);
   const cards = el.pagesContainer.querySelectorAll('.page-card');
-  cards.forEach((card) => {
+  let sampleWidth = Math.max(96, Math.round(BASE_A4_WIDTH_PX * factor));
+
+  cards.forEach((card, i) => {
     const idx = Number(card.dataset.pageIndex);
     const dim = tab.pageDims.get(idx) || { baseWidth: BASE_A4_WIDTH_PX, ratio: DEFAULT_PAGE_RATIO };
-    const widthPx = Math.max(240, Math.round(dim.baseWidth * factor));
+    const widthPx = Math.max(96, Math.round(dim.baseWidth * factor));
     const heightPx = Math.round(widthPx * dim.ratio);
     card.style.width = `${widthPx}px`;
     card.style.minHeight = `${heightPx}px`;
+    if (i === 0) sampleWidth = widthPx;
   });
+
+  // 축소 배율에 따라 한 줄에 2페이지 이상 들어오면 자동으로 다단(2단, 3단 등) 배치
+  const padX = window.innerWidth <= 600 ? 20 : 40;
+  const availW = Math.max(200, el.viewport.clientWidth - padX);
+  const gap = 14;
+  const cols = tab.pageCount > 1 ? Math.max(1, Math.floor((availW + gap) / (sampleWidth + gap))) : 1;
+  const multiCol = cols >= 2;
+
+  el.pagesContainer.classList.toggle('is-multi-col', multiCol);
+  if (multiCol) {
+    el.colBadge.textContent = `${cols}단`;
+    el.colBadge.classList.remove('hidden');
+  } else {
+    el.colBadge.classList.add('hidden');
+  }
 }
 
 function applyZoomMode(tab, mode, numericZoom) {
   tab.zoomMode = mode;
   if (mode === 'manual' && typeof numericZoom === 'number') {
-    tab.zoom = Math.min(4, Math.max(0.3, numericZoom));
+    tab.zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, numericZoom));
   }
   applyPageCardDimensions(tab);
   syncZoomSelectUI(tab);
@@ -950,7 +804,8 @@ function bindViewportTouchZoom() {
           const vpX = t.clientX - rect.left;
           const vpY = t.clientY - rect.top;
           const curZoom = computeZoomFactor(tab);
-          const fitW = Math.max(280, el.viewport.clientWidth - 48) / BASE_A4_WIDTH_PX;
+          const padX = window.innerWidth <= 600 ? 20 : 40;
+          const fitW = Math.max(240, el.viewport.clientWidth - padX) / BASE_A4_WIDTH_PX;
 
           if (curZoom > fitW * 1.15) {
             const originY = el.viewport.scrollTop + vpY;
@@ -960,7 +815,7 @@ function bindViewportTouchZoom() {
             el.viewport.scrollLeft = 0;
             el.viewport.scrollTop = Math.max(0, originY * ratio - vpY);
           } else {
-            const target = Math.min(4, Math.max(1.25, fitW * 2));
+            const target = Math.min(MAX_ZOOM, Math.max(1.25, fitW * 2));
             commitZoomAroundPoint(tab, curZoom, target, vpX, vpY);
           }
           lastTap = null;
@@ -983,7 +838,7 @@ function bindViewportTouchZoom() {
       if (dist < 10) return;
 
       const rawScale = dist / pinch.startDist;
-      const targetZoom = Math.min(4, Math.max(0.3, pinch.startZoom * rawScale));
+      const targetZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, pinch.startZoom * rawScale));
       pinch.targetZoom = targetZoom;
 
       const visualScale = targetZoom / pinch.startZoom;
@@ -1036,7 +891,7 @@ function renderSinglePage(tab, pageIdx, card) {
     }
 
     const factor = computeZoomFactor(tab);
-    const widthPx = Math.max(240, Math.round(nat.baseWidth * factor));
+    const widthPx = Math.max(96, Math.round(nat.baseWidth * factor));
     card.style.width = `${widthPx}px`;
     card.style.minHeight = `${Math.round(widthPx * nat.ratio)}px`;
     tab.renderedPages.add(pageIdx);
@@ -1099,8 +954,7 @@ function buildDocumentPages(tab) {
   el.pagesContainer.appendChild(frag);
   applyPageCardDimensions(tab);
 
-  // 첫 3페이지는 즉시 렌더링
-  const immediateCount = Math.min(3, tab.pageCount);
+  const immediateCount = Math.min(4, tab.pageCount);
   for (let i = 0; i < immediateCount; i++) {
     const card = el.pagesContainer.children[i];
     if (card) renderSinglePage(tab, i, card);
@@ -1145,7 +999,12 @@ function buildSidebarThumbs(tab) {
     label.textContent = `${i + 1}페이지`;
 
     item.append(preview, label);
-    item.addEventListener('click', () => jumpToPage(i + 1));
+    item.addEventListener('click', () => {
+      jumpToPage(i + 1);
+      if (window.innerWidth <= 900) {
+        el.sidebar.classList.add('is-collapsed');
+      }
+    });
     list.appendChild(item);
   }
 
@@ -1167,110 +1026,6 @@ function buildSidebarThumbs(tab) {
   );
 
   list.querySelectorAll('.thumb-item').forEach((item) => thumbObserver.observe(item));
-}
-
-function buildSidebarOutline(tab) {
-  el.paneOutline.innerHTML = '';
-  let items = [];
-
-  try {
-    const raw = tab.doc.getOutlineNavigation();
-    const parsed = safeJsonParse(raw);
-    if (Array.isArray(parsed)) {
-      items = parsed;
-    } else if (parsed && typeof parsed === 'object') {
-      items = parsed.items || parsed.outline || parsed.entries || parsed.nodes || [];
-    }
-  } catch {
-    items = [];
-  }
-
-  if (!Array.isArray(items) || items.length === 0) {
-    el.paneOutline.innerHTML = '<div class="empty-state">이 문서에는 개요 번호 기반 목차가 없습니다.</div>';
-    return;
-  }
-
-  const list = document.createElement('div');
-  list.className = 'outline-list';
-
-  for (const item of items) {
-    const title = item.title || item.text || item.label || '(제목 없음)';
-    const level = Math.min(5, Math.max(0, Number(item.level || item.depth || 0)));
-
-    let pageNum = null;
-    if (Number.isInteger(item.page)) {
-      pageNum = item.page + 1;
-    } else if (Number.isInteger(item.pageIndex)) {
-      pageNum = item.pageIndex + 1;
-    } else if (Number.isInteger(item.paraIdx) || Number.isInteger(item.para_idx)) {
-      try {
-        const sec = Number(item.sectionIdx ?? item.section_idx ?? item.sec ?? 0);
-        const para = Number(item.paraIdx ?? item.para_idx ?? 0);
-        const pos = safeJsonParse(tab.doc.getPageOfPosition(sec, para));
-        if (pos && Number.isInteger(pos.page)) pageNum = pos.page + 1;
-        else if (pos && Number.isInteger(pos.pageIndex)) pageNum = pos.pageIndex + 1;
-      } catch {
-        pageNum = null;
-      }
-    }
-
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'outline-item';
-    btn.style.paddingLeft = `${10 + level * 14}px`;
-    btn.innerHTML = `<span>${escapeHtml(title)}</span>${pageNum ? `<span class="outline-page">${pageNum}쪽</span>` : ''}`;
-    btn.addEventListener('click', () => {
-      if (pageNum) jumpToPage(pageNum);
-    });
-    list.appendChild(btn);
-  }
-
-  el.paneOutline.appendChild(list);
-}
-
-function buildSidebarInfo(tab) {
-  let meta = {};
-  try {
-    const raw = tab.doc.getDocumentInfo();
-    const parsed = safeJsonParse(raw);
-    if (parsed && typeof parsed === 'object') {
-      meta = parsed.metadata || parsed.summary || parsed;
-    }
-  } catch {
-    meta = {};
-  }
-
-  const rows = [
-    ['파일명', tab.name],
-    ['형식', tab.format.toUpperCase()],
-    ['파일 크기', formatBytes(tab.size)],
-    ['총 페이지', `${tab.pageCount}페이지`],
-  ];
-
-  const optionalKeys = [
-    ['title', '제목'],
-    ['subject', '주제'],
-    ['author', '작성자'],
-    ['creator', '작성자'],
-    ['created', '만든 날짜'],
-    ['modified', '수정한 날짜'],
-  ];
-
-  const seenLabels = new Set();
-  for (const [k, label] of optionalKeys) {
-    const v = meta[k];
-    if (v && typeof v === 'string' && v.trim() && !seenLabels.has(label)) {
-      rows.push([label, v.trim()]);
-      seenLabels.add(label);
-    }
-  }
-
-  el.paneInfo.innerHTML = `<div class="info-table">${rows
-    .map(
-      ([label, value]) =>
-        `<div class="info-row"><span class="info-label">${escapeHtml(label)}</span><span class="info-value">${escapeHtml(value)}</span></div>`
-    )
-    .join('')}</div>`;
 }
 
 // ===== 페이지 이동 & 스크롤 동기화 =====
@@ -1332,7 +1087,7 @@ function handleViewportScroll() {
   });
 }
 
-// ===== 본문 검색 =====
+// ===== 글자 검색 =====
 function runSearch(query) {
   const tab = getActiveTab();
   if (!tab) return;
@@ -1348,7 +1103,6 @@ function runSearch(query) {
     return;
   }
 
-  // 1) 페이지 텍스트 기반 안정적 매치 수집 (모든 페이지에서 정확한 페이지 번호 + 스니펫 보장)
   const lowerQ = q.toLowerCase();
   const pageTexts = getAllPageTexts(tab);
 
@@ -1373,7 +1127,6 @@ function runSearch(query) {
     if (searchMatches.length >= 200) break;
   }
 
-  // 2) 만약 getPageText에서 못 찾았을 경우 WASM searchAllText 보조 호출
   if (searchMatches.length === 0) {
     try {
       const raw = tab.doc.searchAllText(q, false, true);
@@ -1391,12 +1144,7 @@ function runSearch(query) {
               pageNum = 1;
             }
           }
-          searchMatches.push({
-            page: pageNum,
-            before: '',
-            match: m.text || q,
-            after: '',
-          });
+          searchMatches.push({ page: pageNum, before: '', match: m.text || q, after: '' });
         }
       }
     } catch {
@@ -1449,13 +1197,7 @@ function selectSearchMatch(idx) {
   jumpToPage(searchMatches[activeSearchIdx].page, true);
 }
 
-// ===== 텍스트 추출 / 내보내기 / 인쇄 =====
-function buildCombinedPlainText(tab) {
-  const texts = getAllPageTexts(tab);
-  if (texts.length === 1) return texts[0];
-  return texts.map((t, i) => `--- ${i + 1}페이지 ---\n${t}`).join('\n\n');
-}
-
+// ===== 파일 다운로드 & 오프라인 PDF 저장 =====
 function bytesToBase64(bytes) {
   let binary = '';
   const chunkSize = 0x8000;
@@ -1500,45 +1242,46 @@ function downloadBlob(data, mime, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function exportActiveAsHwpx() {
+async function exportActiveAsPdf() {
   const tab = getActiveTab();
-  if (!tab) return;
+  if (!tab || exportingPdf) return;
+  exportingPdf = true;
+
+  const labelEl = el.btnSavePdf.querySelector('span');
+  const origLabel = labelEl ? labelEl.textContent : 'PDF';
+  el.btnSavePdf.disabled = true;
+
   try {
-    const hwpxBytes = tab.doc.exportHwpx();
-    downloadBlob(hwpxBytes, 'application/vnd.hancom.hwpx', `${stripExt(tab.name)}.hwpx`);
-    showToast(`${stripExt(tab.name)}.hwpx 파일로 저장했습니다.`, 'success');
-  } catch (err) {
-    showToast(`HWPX 변환 저장 실패: ${formatDetectionError(err)}`, 'error');
-  }
-}
+    showToast(`PDF 생성 중... (총 ${tab.pageCount}페이지)`, 'info', 2200);
+    const pages = [];
+    // 페이지 수가 많을 때는 메모리 절약을 위해 해상도를 자동 조절
+    const targetW = tab.pageCount > 40 ? 1100 : 1440;
 
-function exportActiveAsTxt() {
-  const tab = getActiveTab();
-  if (!tab) return;
-  const text = buildCombinedPlainText(tab);
-  downloadBlob(text, 'text/plain;charset=utf-8', `${stripExt(tab.name)}.txt`);
-  showToast(`${stripExt(tab.name)}.txt 파일로 저장했습니다.`, 'success');
-}
-
-function ensureAllPagesRendered() {
-  const tab = getActiveTab();
-  if (!tab) return;
-  for (let i = 0; i < tab.pageCount; i++) {
-    if (!tab.renderedPages.has(i)) {
-      const card = el.pagesContainer.children[i];
-      if (card) renderSinglePage(tab, i, card);
+    for (let i = 0; i < tab.pageCount; i++) {
+      if (labelEl) labelEl.textContent = `${i + 1}/${tab.pageCount}`;
+      await new Promise((r) => setTimeout(r, 0));
+      const svg = tab.doc.renderPageSvg(i);
+      const pageImg = await svgStringToJpegPage(svg, targetW);
+      pages.push(pageImg);
     }
-  }
-}
 
-function printActiveDocument() {
-  const tab = getActiveTab();
-  if (!tab) return;
-  if (tab.pageCount > 20 && tab.renderedPages.size < tab.pageCount) {
-    showToast('전체 페이지를 인쇄용으로 준비 중입니다...', 'info', 2500);
+    const pdfBytes = buildPdfFromJpegs(pages);
+    const filename = `${stripExt(tab.name)}.pdf`;
+    downloadBlob(pdfBytes, 'application/pdf', filename);
+    showToast(
+      isNativeApp()
+        ? `Downloads 폴더에 ${filename} 저장 완료`
+        : `${filename} 파일로 저장했습니다.`,
+      'success',
+      3800
+    );
+  } catch (err) {
+    showToast(`PDF 저장 실패: ${formatDetectionError(err)}`, 'error', 5200);
+  } finally {
+    exportingPdf = false;
+    el.btnSavePdf.disabled = false;
+    if (labelEl) labelEl.textContent = origLabel;
   }
-  ensureAllPagesRendered();
-  setTimeout(() => window.print(), 60);
 }
 
 // ===== 이벤트 바인딩 =====
@@ -1549,13 +1292,14 @@ function bindEvents() {
       el.welcomeScreen.classList.remove('hidden');
       el.readerLayout.classList.add('hidden');
       el.docToolbar.classList.add('hidden');
+      el.searchBar.classList.add('hidden');
     }
   });
 
-  // 파일 열기
+  // 문서 열기
   const triggerPicker = () => el.fileInput.click();
   el.btnOpenFile.addEventListener('click', triggerPicker);
-  el.btnWelcomeFile.addEventListener('click', triggerPicker);
+  el.welcomeDropzone.addEventListener('click', triggerPicker);
   el.fileInput.addEventListener('change', async () => {
     if (el.fileInput.files?.length) {
       await openFileObjects(el.fileInput.files);
@@ -1563,34 +1307,10 @@ function bindEvents() {
     }
   });
 
-  // URL 열기 모달
-  const openUrlDialog = () => {
-    el.urlError.classList.add('hidden');
-    openModal('url-modal');
-    setTimeout(() => el.urlInput.focus(), 40);
-  };
-  el.btnOpenUrl.addEventListener('click', openUrlDialog);
-  el.btnWelcomeUrl.addEventListener('click', openUrlDialog);
-
-  el.urlForm.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    const raw = el.urlInput.value.trim();
-    if (!raw) return;
-    el.urlError.classList.add('hidden');
-    el.btnUrlSubmit.disabled = true;
-    el.btnUrlSubmit.textContent = '불러오는 중...';
-    try {
-      await openFromUrl(raw);
-      closeModal('url-modal');
-      el.urlInput.value = '';
-    } catch (err) {
-      el.urlError.textContent = formatDetectionError(err);
-      el.urlError.classList.remove('hidden');
-    } finally {
-      el.btnUrlSubmit.disabled = false;
-      el.btnUrlSubmit.textContent = '불러오기';
-    }
-  });
+  // 문서 스캔 열기
+  const openScanner = () => scannerController?.open();
+  el.btnOpenScanner.addEventListener('click', openScanner);
+  el.btnWelcomeScanner.addEventListener('click', openScanner);
 
   // 암호 모달
   el.passwordForm.addEventListener('submit', submitPassword);
@@ -1605,34 +1325,16 @@ function bindEvents() {
     });
   });
 
-  // 샘플 체험
-  el.btnSampleHwpx.addEventListener('click', () => openSampleDocument('hwpx'));
-  el.btnSampleHwp.addEventListener('click', () => openSampleDocument('hwp'));
-
   // 테마
   el.btnTheme.addEventListener('click', toggleTheme);
 
-  // 사이드바
+  // 사이드바(페이지 목록)
   el.btnSidebarToggle.addEventListener('click', () => {
     el.sidebar.classList.toggle('is-collapsed');
     const tab = getActiveTab();
-    if (tab && tab.zoomMode !== 'manual') {
+    if (tab) {
       setTimeout(() => applyPageCardDimensions(tab), 220);
     }
-  });
-
-  el.sidebarTabs.forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const target = btn.dataset.sidebarTab;
-      el.sidebarTabs.forEach((b) => {
-        const active = b.dataset.sidebarTab === target;
-        b.classList.toggle('is-active', active);
-        b.setAttribute('aria-selected', String(active));
-      });
-      document.getElementById('pane-thumbs').classList.toggle('is-active', target === 'thumbs');
-      document.getElementById('pane-outline').classList.toggle('is-active', target === 'outline');
-      document.getElementById('pane-info').classList.toggle('is-active', target === 'info');
-    });
   });
 
   // 페이지 네비게이션
@@ -1651,7 +1353,7 @@ function bindEvents() {
   el.viewport.addEventListener('scroll', handleViewportScroll, { passive: true });
   bindViewportTouchZoom();
 
-  // 줌 제어
+  // 확대/축소 제어
   el.zoomSelect.addEventListener('change', () => {
     const tab = getActiveTab();
     if (!tab) return;
@@ -1667,7 +1369,7 @@ function bindEvents() {
     const tab = getActiveTab();
     if (!tab) return;
     const cur = computeZoomFactor(tab);
-    const next = ZOOM_STEPS.find((z) => z > cur + 0.03) || Math.min(4, cur + 0.25);
+    const next = ZOOM_STEPS.find((z) => z > cur + 0.03) || Math.min(MAX_ZOOM, cur + 0.25);
     applyZoomMode(tab, 'manual', next);
   });
 
@@ -1675,18 +1377,18 @@ function bindEvents() {
     const tab = getActiveTab();
     if (!tab) return;
     const cur = computeZoomFactor(tab);
-    const next = [...ZOOM_STEPS].reverse().find((z) => z < cur - 0.03) || Math.max(0.3, cur - 0.25);
+    const next = [...ZOOM_STEPS].reverse().find((z) => z < cur - 0.03) || Math.max(MIN_ZOOM, cur - 0.1);
     applyZoomMode(tab, 'manual', next);
   });
 
   window.addEventListener('resize', () => {
     const tab = getActiveTab();
-    if (tab && tab.zoomMode !== 'manual') {
+    if (tab) {
       applyPageCardDimensions(tab);
     }
   });
 
-  // 검색 바
+  // 글자 검색
   const openSearch = () => {
     if (!getActiveTab()) return;
     el.searchBar.classList.remove('hidden');
@@ -1709,35 +1411,12 @@ function bindEvents() {
   el.btnSearchPrev.addEventListener('click', () => selectSearchMatch(activeSearchIdx - 1));
   el.btnSearchNext.addEventListener('click', () => selectSearchMatch(activeSearchIdx + 1));
 
-  // 텍스트 추출 & 저장
-  el.btnExtractText.addEventListener('click', () => {
-    const tab = getActiveTab();
-    if (!tab) return;
-    el.extractedTextarea.value = buildCombinedPlainText(tab) || '(추출된 텍스트가 없습니다.)';
-    openModal('text-modal');
-  });
-  el.btnCopyText.addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(el.extractedTextarea.value);
-      showToast('클립보드에 전체 텍스트를 복사했습니다.', 'success');
-    } catch {
-      el.extractedTextarea.select();
-      document.execCommand('copy');
-      showToast('텍스트를 복사했습니다.', 'success');
-    }
-  });
-  el.btnDownloadTxt.addEventListener('click', exportActiveAsTxt);
-  el.btnSaveTxt.addEventListener('click', exportActiveAsTxt);
-  el.btnSaveHwpx.addEventListener('click', exportActiveAsHwpx);
+  // PDF 저장
+  el.btnSavePdf.addEventListener('click', exportActiveAsPdf);
 
-  // 인쇄 / PDF
-  el.btnPrint.addEventListener('click', printActiveDocument);
-  window.addEventListener('beforeprint', ensureAllPagesRendered);
-
-  // 전역 붙여넣기 (Ctrl+V) — 파일 및 URL 모두 지원
+  // 전역 붙여넣기 (Ctrl+V) — 파일 붙여넣기
   window.addEventListener('paste', async (e) => {
     if (isEditableFocused()) return;
-
     const dt = e.clipboardData;
     if (!dt) return;
 
@@ -1756,24 +1435,6 @@ function bindEvents() {
     if (attachedFiles.length > 0) {
       e.preventDefault();
       await openFileObjects(attachedFiles);
-      return;
-    }
-
-    const text = (dt.getData('text/plain') || '').trim();
-    if (/^https?:\/\/\S+/i.test(text)) {
-      e.preventDefault();
-      try {
-        await openFromUrl(text);
-      } catch (err) {
-        showToast(formatDetectionError(err), 'error', 5200);
-      }
-      return;
-    }
-
-    if (text) {
-      showToast('파일 탐색기에서 .hwpx/.hwp 파일을 복사(Ctrl+C)해 붙여넣거나, 파일 URL을 붙여넣어 주세요.', 'info', 4200);
-    } else {
-      showToast('붙여넣은 클립보드에 파일 데이터가 없습니다. 파일을 끌어다 놓거나 [파일 선택]을 이용해 주세요.', 'info', 4200);
     }
   });
 
@@ -1838,7 +1499,7 @@ function bindEvents() {
       el.btnZoomOut.click();
     } else if (e.key === '0') {
       e.preventDefault();
-      applyZoomMode(tab, 'manual', 1);
+      applyZoomMode(tab, 'fit-width');
     } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
       if (tab.currentPage > 1) {
         e.preventDefault();
@@ -1852,7 +1513,6 @@ function bindEvents() {
     }
   });
 
-  // 페이지 종료 시 WASM 문서 메모리 정리
   window.addEventListener('beforeunload', () => {
     for (const tab of tabs) {
       try {
@@ -1888,36 +1548,37 @@ async function consumeAndroidPendingFiles() {
 // ===== 초기화 =====
 async function bootstrap() {
   initTheme();
-  if (window.innerWidth <= 900) {
-    el.sidebar.classList.add('is-collapsed');
-  }
+
   if (isNativeApp()) {
-    // 안드로이드 파일 선택기에서 .hwpx/.hwp MIME 미등록으로 비활성화되는 문제 방지
     el.fileInput.removeAttribute('accept');
     window.addEventListener('android-hwp-file', () => {
       consumeAndroidPendingFiles();
     });
   }
+
+  scannerController = initDocumentScanner({
+    showToast,
+    onSavePdf(pdfBytes, filename) {
+      downloadBlob(pdfBytes, 'application/pdf', filename);
+      showToast(
+        isNativeApp()
+          ? `Downloads 폴더에 ${filename} 저장 완료`
+          : `${filename} 파일로 저장했습니다.`,
+        'success',
+        3800
+      );
+    },
+  });
+
   bindEvents();
   updateDocControlsState();
 
-  // 페이지 진입과 동시에 WASM 엔진 선로드 시작
   ensureEngineReady().catch(() => {
     // 에러 상태는 엔진 배지에서 안내됨
   });
 
   if (isNativeApp()) {
     await consumeAndroidPendingFiles();
-  }
-
-  // ?url=... 쿼리 파라미터가 있으면 자동 열기
-  const paramUrl = new URLSearchParams(window.location.search).get('url');
-  if (paramUrl) {
-    try {
-      await openFromUrl(paramUrl);
-    } catch (err) {
-      showToast(`URL 문서를 불러오지 못했습니다: ${formatDetectionError(err)}`, 'error', 5200);
-    }
   }
 }
 

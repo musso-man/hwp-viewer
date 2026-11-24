@@ -9,7 +9,7 @@ const vendorRhwpDir = path.join(wwwDir, 'vendor', 'rhwp');
 fs.rmSync(wwwDir, { recursive: true, force: true });
 fs.mkdirSync(vendorRhwpDir, { recursive: true });
 
-for (const file of ['index.html', 'app.js', 'style.css']) {
+for (const file of ['index.html', 'app.js', 'style.css', 'pdf-utils.js', 'scanner.js']) {
   fs.copyFileSync(path.join(root, file), path.join(wwwDir, file));
 }
 
