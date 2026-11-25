@@ -307,6 +307,7 @@ function openModal(id) {
   const modal = document.getElementById(id);
   if (!modal) return;
   modal.classList.remove('hidden');
+  pushWebSubViewHistory();
 }
 
 function closeModal(id) {
@@ -318,10 +319,74 @@ function closeModal(id) {
     el.passwordInput.value = '';
     el.passwordError.classList.add('hidden');
   }
+  if (isOnHomeScreen()) {
+    syncWebHomeHistory();
+  }
 }
 
 function closeAllModals() {
   ['password-modal', 'scanner-modal'].forEach(closeModal);
+}
+
+// ===== 홈 화면 & 뒤로가기 제어 =====
+function isAnyModalOpen() {
+  const pwOpen = el.passwordModal && !el.passwordModal.classList.contains('hidden');
+  const scannerEl = document.getElementById('scanner-modal');
+  const scannerOpen = scannerEl && !scannerEl.classList.contains('hidden');
+  return Boolean(pwOpen || scannerOpen);
+}
+
+function isOnHomeScreen() {
+  return !el.welcomeScreen.classList.contains('hidden') && !isAnyModalOpen();
+}
+
+function pushWebSubViewHistory() {
+  if (isNativeApp()) return;
+  if (!window.history.state?.hwpViewerSubView) {
+    window.history.pushState({ hwpViewerSubView: true }, '');
+  }
+}
+
+function syncWebHomeHistory() {
+  if (isNativeApp()) return;
+  if (window.history.state?.hwpViewerSubView) {
+    window.history.back();
+  }
+}
+
+function showHomeScreen({ fromPopState = false } = {}) {
+  ['password-modal', 'scanner-modal'].forEach((id) => {
+    const modal = document.getElementById(id);
+    if (!modal) return;
+    modal.classList.add('hidden');
+    if (id === 'password-modal') {
+      pendingEncrypted = null;
+      el.passwordInput.value = '';
+      el.passwordError.classList.add('hidden');
+    }
+  });
+  el.searchBar.classList.add('hidden');
+  activeSearchQuery = '';
+  clearAllSearchHighlights();
+  el.sidebar.classList.add('is-collapsed');
+  document.body.classList.remove('has-doc');
+  el.btnSearchToggle.classList.add('hidden');
+  el.btnSavePdf.classList.add('hidden');
+  el.welcomeScreen.classList.remove('hidden');
+  el.readerLayout.classList.add('hidden');
+  el.docToolbar.classList.add('hidden');
+
+  if (!fromPopState) {
+    syncWebHomeHistory();
+  }
+}
+
+function handleAndroidBack() {
+  if (isOnHomeScreen()) {
+    return 'exit';
+  }
+  showHomeScreen();
+  return 'handled';
 }
 
 // ===== 문서 파싱 & SVG ID 격리 =====
@@ -686,9 +751,13 @@ function activateTab(tabId) {
     disconnectObservers();
     el.pagesContainer.innerHTML = '';
     el.paneThumbs.innerHTML = '';
+    if (isOnHomeScreen()) {
+      syncWebHomeHistory();
+    }
     return;
   }
 
+  pushWebSubViewHistory();
   buildDocumentPages(tab);
   buildSidebarThumbs(tab);
 
@@ -1623,12 +1692,8 @@ async function exportActiveAsPdf() {
 function bindEvents() {
   el.brandHome.addEventListener('click', (e) => {
     e.preventDefault();
-    if (tabs.length > 0) {
-      document.body.classList.remove('has-doc');
-      el.welcomeScreen.classList.remove('hidden');
-      el.readerLayout.classList.add('hidden');
-      el.docToolbar.classList.add('hidden');
-      el.searchBar.classList.add('hidden');
+    if (!isOnHomeScreen()) {
+      showHomeScreen();
     }
   });
 
@@ -1644,7 +1709,10 @@ function bindEvents() {
   });
 
   // 문서 스캔 열기
-  const openScanner = () => scannerController?.open();
+  const openScanner = () => {
+    scannerController?.open();
+    pushWebSubViewHistory();
+  };
   el.btnOpenScanner.addEventListener('click', openScanner);
   el.btnWelcomeScanner.addEventListener('click', openScanner);
 
@@ -1893,11 +1961,18 @@ async function consumeAndroidPendingFiles() {
 // ===== 초기화 =====
 async function bootstrap() {
   initTheme();
+  window.__handleAndroidBack = handleAndroidBack;
 
   if (isNativeApp()) {
     el.fileInput.removeAttribute('accept');
     window.addEventListener('android-hwp-file', () => {
       consumeAndroidPendingFiles();
+    });
+  } else {
+    window.addEventListener('popstate', () => {
+      if (!isOnHomeScreen()) {
+        showHomeScreen({ fromPopState: true });
+      }
     });
   }
 
@@ -1912,6 +1987,9 @@ async function bootstrap() {
         'success',
         3800
       );
+      setTimeout(() => {
+        if (isOnHomeScreen()) syncWebHomeHistory();
+      }, 0);
     },
   });
 

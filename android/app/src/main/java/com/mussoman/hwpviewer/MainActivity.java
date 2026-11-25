@@ -17,6 +17,7 @@ import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
+import androidx.activity.OnBackPressedCallback;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowCompat;
@@ -47,6 +48,7 @@ public class MainActivity extends BridgeActivity {
         super.onCreate(savedInstanceState);
 
         setupSystemBarInsets();
+        setupBackNavigation();
 
         boolean nightMode = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
                 == Configuration.UI_MODE_NIGHT_YES;
@@ -57,6 +59,31 @@ public class MainActivity extends BridgeActivity {
         }
 
         handleIncomingIntent(getIntent(), true);
+    }
+
+    private void setupBackNavigation() {
+        getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
+            @Override
+            public void handleOnBackPressed() {
+                WebView webView = (getBridge() != null) ? getBridge().getWebView() : null;
+                if (webView == null) {
+                    exitApp();
+                    return;
+                }
+                webView.evaluateJavascript(
+                        "(function(){ return typeof window.__handleAndroidBack === 'function' ? window.__handleAndroidBack() : 'exit'; })()",
+                        value -> {
+                            if (value == null || !value.contains("handled")) {
+                                exitApp();
+                            }
+                        }
+                );
+            }
+        });
+    }
+
+    private void exitApp() {
+        finishAndRemoveTask();
     }
 
     private void setupSystemBarInsets() {
